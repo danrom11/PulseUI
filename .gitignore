@@ -1,0 +1,88 @@
+# CMake build directories
+build/
+[Cc]MakeCache.txt
+[Cc]MakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+compile_commands.json
+CMakeUserPresets.json
+CMakePresets.json
+CTestTestfile.cmake
+_install/
+
+# Ninja
+.ninja_deps
+.ninja_log
+
+# IDE/Editor
+.vscode/
+.idea/
+*.iml
+
+# macOS
+.DS_Store
+*.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Object & binary files
+*.o
+*.obj
+*.lo
+*.la
+*.al
+*.libs
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Generated files
+*.pch
+*.pdb
+*.ilk
+*.mod
+*.smod
+*.slo
+*.idb
+*.dSYM/
+
+# Logs & temp
+*.log
+*.swp
+*.swo
+*.tmp
+*.bak
+*.old
+
+# Coverage / profiling
+*.gcno
+*.gcda
+*.gcov
+*.prof
+*.profraw
+*.profdata
+
+# Test outputs
+Testing/
+test-results/
+coverage/
+
+# Clangd / LSP
+.cache/
+.clangd/
+.clang-tidy-cache/
