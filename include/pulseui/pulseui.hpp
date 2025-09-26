@@ -11,5 +11,6 @@
 #include <pulseui/ui/input.hpp>
 #include <pulseui/ui/layout.hpp>
 #include <pulseui/ui/widget.hpp>
+#include <pulseui/ui/button.hpp>
 
 #include <pulseui/platform/platform.hpp>

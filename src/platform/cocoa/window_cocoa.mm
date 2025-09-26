@@ -1,116 +1,138 @@
-#import <AppKit/AppKit.h>
-#include <memory>
+#import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>
 #include <functional>
+#include <memory>
+#include <string>
+
 #include <pulseui/ui/window.hpp>
 #include <pulseui/ui/input.hpp>
+#include <pulseui/ui/canvas.hpp>
 
-// -------------------- Objective-C part (global scope) --------------------
-@interface PulseUIView : NSView
-@property(nonatomic, copy) void (^paintBlock)(NSView* view, CGContextRef ctx, CGFloat scale);
-@property(nonatomic, copy) void (^inputBlock)(NSEvent* ev, NSView* view);
+namespace pulseui::ui {
+  std::unique_ptr<Canvas> make_canvas_from_context(CGContextRef, float dpi_scale);
+}
+
+using pulseui::ui::Canvas;
+using pulseui::ui::InputEvent;
+
+@interface PulseView : NSView {
+@public
+  std::function<void(Canvas&)>* paintCB;
+  std::function<void(const InputEvent&)>* inputCB;
+  float dpiScale;
+}
+- (void)emitMouse:(InputEvent::Type)type fromEvent:(NSEvent*)e;
 @end
 
-@implementation PulseUIView
+@implementation PulseView
 - (BOOL)isFlipped { return YES; }
-- (BOOL)acceptsFirstResponder { return YES; }
 
-- (void)viewDidMoveToWindow {
-  [super viewDidMoveToWindow];
-  [self.window makeFirstResponder:self];
+- (instancetype)initWithFrame:(NSRect)frameRect {
+  if (self = [super initWithFrame:frameRect]) {
+    paintCB = nullptr;
+    inputCB = nullptr;
+    self.wantsLayer = YES;
+    if (!self.layer) self.layer = [CALayer layer];
+    CGFloat s = NSScreen.mainScreen.backingScaleFactor; if (s <= 0) s = 1.0;
+    self.layer.contentsScale = s; dpiScale = (float)s;
+    [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds
+                                                       options:NSTrackingMouseMoved|NSTrackingActiveAlways|NSTrackingInVisibleRect
+                                                         owner:self userInfo:nil]];
+  }
+  return self;
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
   [super drawRect:dirtyRect];
-  if (self.paintBlock) {
-    CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
-    NSScreen* screen = self.window.screen ?: NSScreen.mainScreen;
-    CGFloat scale = screen ? screen.backingScaleFactor : 1.0;
-    self.paintBlock(self, ctx, scale);
-  }
+  if (!paintCB) return;
+  CGContextRef ctx = (CGContextRef)[[NSGraphicsContext currentContext] CGContext];
+  auto canvas = pulseui::ui::make_canvas_from_context(ctx, dpiScale);
+  (*paintCB)(*canvas);
 }
-- (void)mouseDown:(NSEvent *)event        { if (self.inputBlock) self.inputBlock(event, self); }
-- (void)mouseUp:(NSEvent *)event          { if (self.inputBlock) self.inputBlock(event, self); }
-- (void)mouseMoved:(NSEvent *)event       { if (self.inputBlock) self.inputBlock(event, self); }
-- (void)mouseDragged:(NSEvent *)event     { if (self.inputBlock) self.inputBlock(event, self); }
-- (void)rightMouseDown:(NSEvent *)event   { if (self.inputBlock) self.inputBlock(event, self); }
-- (void)rightMouseUp:(NSEvent *)event     { if (self.inputBlock) self.inputBlock(event, self); }
+
+- (void)emitMouse:(InputEvent::Type)type fromEvent:(NSEvent*)e {
+  if (!inputCB) return;
+  NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+  InputEvent ev{}; ev.type = type; ev.pos = {(float)p.x, (float)p.y};
+  (*inputCB)(ev);
+}
+
+- (void)mouseMoved:(NSEvent *)e   { [self emitMouse:InputEvent::MouseMove fromEvent:e]; }
+- (void)mouseDragged:(NSEvent *)e { [self emitMouse:InputEvent::MouseMove fromEvent:e]; }
+- (void)mouseDown:(NSEvent *)e    { [self emitMouse:InputEvent::MouseDown fromEvent:e]; }
+- (void)mouseUp:(NSEvent *)e      { [self emitMouse:InputEvent::MouseUp   fromEvent:e]; }
+
 @end
 
-// -------------------- C++ part --------------------
-namespace pulseui::platform {
-  std::unique_ptr<pulseui::ui::Canvas> make_cg_canvas(CGContextRef ctx, float scale);
+namespace pulseui::ui {
 
-  class CocoaWindow final : public pulseui::ui::Window {
-    NSWindow* win_{nullptr};
-    PulseUIView* view_{nullptr};
-    pulseui::ui::Window::PaintCB paint_;
-    pulseui::ui::Window::InputCB input_;
+class CocoaWindow final : public Window {
+public:
+  CocoaWindow(int width, int height, std::string title) {
+    @autoreleasepool {
+      NSRect frame = NSMakeRect(0, 0, width, height);
+      window_ = [[NSWindow alloc] initWithContentRect:frame
+                                            styleMask:(NSWindowStyleMaskTitled|
+                                                       NSWindowStyleMaskClosable|
+                                                       NSWindowStyleMaskResizable|
+                                                       NSWindowStyleMaskMiniaturizable)
+                                              backing:NSBackingStoreBuffered
+                                                defer:NO];
+      [window_ center];
+      [window_ setTitle:[NSString stringWithUTF8String:title.c_str()]];
 
-  public:
-    CocoaWindow(int width, int height, const std::string& title) {
-      NSRect rect = NSMakeRect(0, 0, width, height);
-      NSUInteger style = NSWindowStyleMaskTitled
-                       | NSWindowStyleMaskClosable
-                       | NSWindowStyleMaskResizable
-                       | NSWindowStyleMaskMiniaturizable;
+      view_ = [[PulseView alloc] initWithFrame:frame];
+      [window_ setContentView:view_];
+      [window_ makeKeyAndOrderFront:nil];
 
-      win_ = [[NSWindow alloc] initWithContentRect:rect
-                                         styleMask:style
-                                           backing:NSBackingStoreBuffered
-                                             defer:NO];
-      [win_ setTitle:[NSString stringWithUTF8String:title.c_str()]];
-      [win_ center];
-      [win_ setAcceptsMouseMovedEvents:YES];
+      paint_holder_ = std::make_unique<std::function<void(Canvas&)>>();
+      input_holder_ = std::make_unique<std::function<void(const InputEvent&)>>();
+      view_->paintCB = paint_holder_.get();
+      view_->inputCB = input_holder_.get();
 
-      view_ = [[PulseUIView alloc] initWithFrame:rect];
-      [win_ setContentView:view_];
-      [win_ makeKeyAndOrderFront:nil];
-      [win_ makeFirstResponder:view_];
-
-      __weak PulseUIView* weakView = view_; // ARC
-
-      view_.paintBlock = ^(NSView* v, CGContextRef ctx, CGFloat scale) {
-        if (!paint_) return;
-        auto canvas = make_cg_canvas(ctx, scale);
-        paint_(*canvas);
-      };
-
-      view_.inputBlock = ^(NSEvent* ev, NSView* v) {
-        if (!input_) return;
-        pulseui::ui::InputEvent e{};
-        switch (ev.type) {
-          case NSEventTypeLeftMouseDown:  e.type = pulseui::ui::InputEvent::MouseDown; break;
-          case NSEventTypeLeftMouseUp:    e.type = pulseui::ui::InputEvent::MouseUp;   break;
-          case NSEventTypeRightMouseDown: e.type = pulseui::ui::InputEvent::MouseDown; break;
-          case NSEventTypeRightMouseUp:   e.type = pulseui::ui::InputEvent::MouseUp;   break;
-          case NSEventTypeMouseMoved:
-          case NSEventTypeLeftMouseDragged:
-          case NSEventTypeRightMouseDragged:
-            e.type = pulseui::ui::InputEvent::MouseMove; break;
-          default: return;
-        }
-        NSPoint p = [weakView convertPoint:ev.locationInWindow fromView:nil];
-        e.pos = { (float)p.x, (float)p.y };
-        input_(e);
-      };
+      *paint_holder_ = [](Canvas&){};
+      *input_holder_ = [](const InputEvent&){};
     }
-
-    ~CocoaWindow() override = default; // ARC manages memory
-
-    void set_title(std::string t) override {
-      [win_ setTitle:[NSString stringWithUTF8String:t.c_str()]];
-    }
-    void invalidate() override { [view_ setNeedsDisplay:YES]; }
-    float dpi_scale() const override {
-      NSScreen* s = win_.screen ?: NSScreen.mainScreen;
-      return s ? (float)s.backingScaleFactor : 1.0f;
-    }
-    void on_paint(PaintCB cb) override { paint_ = std::move(cb); [view_ setNeedsDisplay:YES]; }
-    void on_input(InputCB cb) override { input_ = std::move(cb); }
-  };
-
-  std::unique_ptr<pulseui::ui::Window>
-  make_cocoa_window(int width, int height, const std::string& title) {
-    return std::make_unique<CocoaWindow>(width, height, title);
   }
-} // namespace pulseui::platform
+
+  ~CocoaWindow() override {
+    @autoreleasepool {
+      if (view_) { view_->paintCB = nullptr; view_->inputCB = nullptr; }
+      if (window_) { [window_ orderOut:nil]; [window_ close]; }
+      view_ = nil; window_ = nil;
+    }
+  }
+
+  void set_title(std::string t) override {
+    @autoreleasepool { [window_ setTitle:[NSString stringWithUTF8String:t.c_str()]]; }
+  }
+
+  void invalidate() override {
+    @autoreleasepool { [view_ setNeedsDisplay:YES]; }
+  }
+
+  float dpi_scale() const override {
+    @autoreleasepool {
+      CGFloat s = window_.screen.backingScaleFactor; if (s <= 0) s = 1.0;
+      return (float)s;
+    }
+  }
+
+  void on_paint(PaintCB cb) override { *paint_holder_ = std::move(cb); [view_ setNeedsDisplay:YES]; }
+  void on_input(InputCB cb) override { *input_holder_ = std::move(cb); }
+
+private:
+  NSWindow*  window_{nil};
+  PulseView* view_{nil};
+  std::unique_ptr<std::function<void(Canvas&)>>           paint_holder_;
+  std::unique_ptr<std::function<void(const InputEvent&)>> input_holder_;
+};
+
+} // namespace pulseui::ui
+
+namespace pulseui::platform {
+  std::unique_ptr<pulseui::ui::Window>
+  make_cocoa_window(int w, int h, const std::string& title) {
+    return std::make_unique<pulseui::ui::CocoaWindow>(w, h, title);
+  }
+}

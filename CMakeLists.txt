@@ -136,3 +136,4 @@ add_library(PulseUI::PulseUI ALIAS PulseUI)
 # ------------------------------------------------------------------
 add_subdirectory(examples/00_hello_window)
 add_subdirectory(examples/01_counter_reactive)
+add_subdirectory(examples/02_example_button)
