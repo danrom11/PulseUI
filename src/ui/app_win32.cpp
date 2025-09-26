@@ -1,9 +1,10 @@
 #include <windows.h>
+#include <pulseui/platform/platform.hpp>
 
 namespace pulseui::platform {
 
 void app_init() {
-
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 }
 
 void app_run() {

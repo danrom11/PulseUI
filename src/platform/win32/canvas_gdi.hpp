@@ -1,84 +1,83 @@
 #pragma once
-
 #include <windows.h>
 #include <string>
 #include <string_view>
-#include <cmath>
+#include <memory>
 #include <pulseui/ui/canvas.hpp>
 
 namespace pulseui::platform {
 
-inline std::wstring widen_utf8(std::string_view s) {
-  if (s.empty()) return std::wstring();
+inline std::wstring utf8_to_utf16(std::string_view s) {
+  if (s.empty()) return {};
   int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
-  std::wstring w(len, L'\0');
-  if (len > 0) {
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), len);
-  }
-  return w;
+  std::wstring out(len, L'\0');
+  if (len) MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), len);
+  return out;
 }
 
-inline LONG to_LONG(float v) { return (LONG)std::lroundf(v); }
-inline LONG to_LONG(int   v) { return (LONG)v; }
-
-inline COLORREF to_colorref(ui::Color c) {
-  auto clamp = [](float x) {
-    if (x < 0.f) return 0.f;
-    if (x > 1.f) return 1.f;
-    return x;
-  };
-  const BYTE R = (BYTE)(clamp(c.r) * 255.0f + 0.5f);
-  const BYTE G = (BYTE)(clamp(c.g) * 255.0f + 0.5f);
-  const BYTE B = (BYTE)(clamp(c.b) * 255.0f + 0.5f);
-  return RGB(R, G, B);
-}
-
-class GdiCanvas : public ui::Canvas {
+class GdiCanvas final : public ui::Canvas {
 public:
-  explicit GdiCanvas(HDC hdc) : hdc_(hdc) {}
+  explicit GdiCanvas(HDC hdc) : hdc_(hdc) {
+    SetBkMode(hdc_, TRANSPARENT);
+  }
 
   void clear(ui::Color c) override {
-    RECT rc{};
+    RECT rc;
     GetClipBox(hdc_, &rc);
-    HBRUSH br = CreateSolidBrush(to_colorref(c));
-    FillRect(hdc_, &rc, br);
-    DeleteObject(br);
+    HBRUSH brush = CreateSolidBrush(to_colorref(c));
+    FillRect(hdc_, &rc, brush);
+    DeleteObject(brush);
   }
 
   void fill_rect(ui::Rect r, ui::Color c) override {
-    RECT rc{
-      to_LONG(r.x),
-      to_LONG(r.y),
-      to_LONG(r.x + r.w),
-      to_LONG(r.y + r.h)
-    };
-    HBRUSH br = CreateSolidBrush(to_colorref(c));
-    FillRect(hdc_, &rc, br);
-    DeleteObject(br);
+    RECT rc{ (LONG)r.x, (LONG)r.y, (LONG)(r.x + r.w), (LONG)(r.y + r.h) };
+    HBRUSH brush = CreateSolidBrush(to_colorref(c));
+    FillRect(hdc_, &rc, brush);
+    DeleteObject(brush);
   }
 
   void draw_text(ui::Point p,
-                 std::string_view utf8,
-                 const ui::Font& /*font*/,
-                 ui::Color color) override {
-    HFONT oldFont = (HFONT)SelectObject(hdc_, GetStockObject(DEFAULT_GUI_FONT));
-    int    oldBk  = SetBkMode(hdc_, TRANSPARENT);
-    COLORREF oldTx = SetTextColor(hdc_, to_colorref(color));
+                 std::string_view text,
+                 const ui::Font& f,
+                 ui::Color c) override
+  {
+    HFONT font = CreateFontW(
+      -(int)(f.size), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HFONT old = (HFONT)SelectObject(hdc_, font);
 
-    std::wstring w = widen_utf8(utf8);
-    if (!w.empty()) {
-      TextOutW(hdc_, to_LONG(p.x), to_LONG(p.y), w.c_str(), (int)w.size());
-    }
+    SetTextColor(hdc_, to_colorref(c));
+    auto w = utf8_to_utf16(text);
+    TextOutW(hdc_, (int)p.x, (int)p.y, w.c_str(), (int)w.size());
 
-    SetTextColor(hdc_, oldTx);
-    SetBkMode(hdc_, oldBk);
-    SelectObject(hdc_, oldFont);
+    SelectObject(hdc_, old);
+    DeleteObject(font);
   }
 
-  HDC hdc() const { return hdc_; }
+  float text_width(std::string_view text, const ui::Font& f) const override {
+    HFONT font = CreateFontW(
+      -(int)(f.size), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HFONT old = (HFONT)SelectObject(hdc_, font);
+
+    SIZE sz{0,0};
+    auto w = utf8_to_utf16(text);
+    GetTextExtentPoint32W(hdc_, w.c_str(), (int)w.size(), &sz);
+
+    SelectObject(hdc_, old);
+    DeleteObject(font);
+    return (float)sz.cx;
+  }
 
 private:
-  HDC hdc_{nullptr};
+  static COLORREF to_colorref(const ui::Color& c) {
+    auto clamp = [](float v){ return (BYTE)(v < 0 ? 0 : v > 1 ? 255 : (int)(v*255 + 0.5f)); };
+    return RGB(clamp(c.r), clamp(c.g), clamp(c.b));
+  }
+
+  HDC hdc_{};
 };
 
 } // namespace pulseui::platform

@@ -8,20 +8,16 @@
 
 namespace pulseui::ui {
 
-// Base interface for internal widget stores
 struct IWidget {
   virtual ~IWidget() = default;
   virtual void paint(Canvas& g) = 0;
   virtual bool mouse_move(Point p) = 0;
   virtual bool mouse_down(Point p, MouseButton b) = 0;
   virtual bool mouse_up(Point p, MouseButton b) = 0;
+  virtual bool key_down(int keycode, const std::string& text) { (void)keycode; (void)text; return false; }
+  virtual bool key_up(int keycode) { (void)keycode; return false; }
 };
 
-// Adapter for a custom W widget with methods:
-// void paint(Canvas&)
-// bool handle_mouse_move(Point)
-// bool handle_mouse_down(Point, MouseButton)
-// bool handle_mouse_up(Point, MouseButton)
 template<class W>
 class WidgetHolder final : public IWidget {
 public:
@@ -33,11 +29,21 @@ public:
   bool mouse_down(Point p, MouseButton b) override { return obj.handle_mouse_down(p, b); }
   bool mouse_up(Point p, MouseButton b) override { return obj.handle_mouse_up(p, b); }
 
+  bool key_down(int keycode, const std::string& text) override {
+    if constexpr (requires(W w){ w.handle_keydown(0, std::string{}); })
+      return obj.handle_keydown(keycode, text);
+    return false;
+  }
+
+  bool key_up(int keycode) override {
+    if constexpr (requires(W w){ w.handle_keyup(0); })
+      return obj.handle_keyup(keycode);
+    return false;
+  }
+
   W obj;
 };
 
-// Manager: subscribes to the window's on_paint/on_input events and distributes them to all widgets.
-// Doesn't own the window; it accepts a reference.
 class Manager {
 public:
   explicit Manager(Window& win) : win_(win) {
@@ -57,6 +63,12 @@ public:
           break;
         case InputEvent::MouseUp:
           for (auto& w : widgets_) dirty |= w->mouse_up(e.pos, MouseButton::Left);
+          break;
+        case InputEvent::KeyDown:
+          for (auto& w : widgets_) dirty |= w->key_down(e.keycode, e.text);
+          break;
+        case InputEvent::KeyUp:
+          for (auto& w : widgets_) dirty |= w->key_up(e.keycode);
           break;
         default: break;
       }

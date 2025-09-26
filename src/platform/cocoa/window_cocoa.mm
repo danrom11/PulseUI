@@ -17,15 +17,20 @@ using pulseui::ui::InputEvent;
 
 @interface PulseView : NSView {
 @public
-  std::function<void(Canvas&)>* paintCB;
-  std::function<void(const InputEvent&)>* inputCB;
-  float dpiScale;
+  std::function<void(Canvas&)>*               paintCB;
+  std::function<void(const InputEvent&)>*     inputCB;
+  float                                       dpiScale;
 }
 - (void)emitMouse:(InputEvent::Type)type fromEvent:(NSEvent*)e;
 @end
 
 @implementation PulseView
+
 - (BOOL)isFlipped { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)becomeFirstResponder { return YES; }
+- (BOOL)resignFirstResponder { return YES; }
+- (BOOL)canBecomeKeyView { return YES; }
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
   if (self = [super initWithFrame:frameRect]) {
@@ -35,6 +40,7 @@ using pulseui::ui::InputEvent;
     if (!self.layer) self.layer = [CALayer layer];
     CGFloat s = NSScreen.mainScreen.backingScaleFactor; if (s <= 0) s = 1.0;
     self.layer.contentsScale = s; dpiScale = (float)s;
+
     [self addTrackingArea:[[NSTrackingArea alloc] initWithRect:self.bounds
                                                        options:NSTrackingMouseMoved|NSTrackingActiveAlways|NSTrackingInVisibleRect
                                                          owner:self userInfo:nil]];
@@ -57,10 +63,60 @@ using pulseui::ui::InputEvent;
   (*inputCB)(ev);
 }
 
+#pragma mark - Mouse
+
+- (void)mouseDown:(NSEvent *)e {
+  [[self window] makeFirstResponder:self];
+  [self emitMouse:InputEvent::MouseDown fromEvent:e];
+}
+- (void)mouseUp:(NSEvent *)e      { [self emitMouse:InputEvent::MouseUp   fromEvent:e]; }
 - (void)mouseMoved:(NSEvent *)e   { [self emitMouse:InputEvent::MouseMove fromEvent:e]; }
 - (void)mouseDragged:(NSEvent *)e { [self emitMouse:InputEvent::MouseMove fromEvent:e]; }
-- (void)mouseDown:(NSEvent *)e    { [self emitMouse:InputEvent::MouseDown fromEvent:e]; }
-- (void)mouseUp:(NSEvent *)e      { [self emitMouse:InputEvent::MouseUp   fromEvent:e]; }
+
+#pragma mark - Keyboard
+
+- (void)keyDown:(NSEvent *)event {
+  [self interpretKeyEvents:@[event]];
+}
+
+- (void)insertText:(id)string {
+  if (!inputCB) return;
+  NSString *ns = [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString*)string string] : (NSString*)string;
+  if (!ns) return;
+
+  const char *utf8 = [ns UTF8String];
+  if (!utf8) return;
+
+  InputEvent ev{};
+  ev.type = InputEvent::KeyDown;
+  ev.keycode = 0;
+  ev.text = std::string(utf8);
+  ev.pos = {0.f, 0.f};
+  (*inputCB)(ev);
+}
+
+- (void)insertText:(id)string replacementRange:(NSRange)range {
+  (void)range;
+  [self insertText:string];
+}
+
+- (void)doCommandBySelector:(SEL)sel {
+  if (!inputCB) return;
+
+  if (sel == @selector(deleteBackward:)) {
+    InputEvent ev{};
+    ev.type = InputEvent::KeyDown;
+    ev.keycode = 51;
+    (*inputCB)(ev);
+    return;
+  }
+
+  if (sel == @selector(insertNewline:) || sel == @selector(insertLineBreak:)) {
+    return;
+  }
+
+  [super doCommandBySelector:sel];
+}
 
 @end
 
@@ -84,6 +140,7 @@ public:
       view_ = [[PulseView alloc] initWithFrame:frame];
       [window_ setContentView:view_];
       [window_ makeKeyAndOrderFront:nil];
+      [window_ makeFirstResponder:view_];
 
       paint_holder_ = std::make_unique<std::function<void(Canvas&)>>();
       input_holder_ = std::make_unique<std::function<void(const InputEvent&)>>();

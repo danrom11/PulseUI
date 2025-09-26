@@ -14,6 +14,7 @@
 #include <pulseui/ui/widget.hpp>
 #include <pulseui/ui/button.hpp>
 #include <pulseui/ui/label.hpp>
+#include <pulseui/ui/text_field.hpp>
 #include <pulseui/ui/click_surface.hpp>
 
 #include <pulseui/platform/platform.hpp>

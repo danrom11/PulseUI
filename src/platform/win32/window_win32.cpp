@@ -9,9 +9,18 @@
 #include <pulseui/ui/window.hpp>
 #include <pulseui/ui/canvas.hpp>
 #include <pulseui/ui/input.hpp>
+#include <pulseui/platform/platform.hpp>
 #include "canvas_gdi.hpp"
 
 namespace pulseui::platform {
+
+static std::wstring widen_utf8(std::string_view s) {
+  if (s.empty()) return {};
+  int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+  std::wstring out(len, L'\0');
+  if (len) MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), out.data(), len);
+  return out;
+}
 
 class Win32Window final : public ui::Window {
 public:
@@ -36,16 +45,26 @@ public:
   }
 
   float dpi_scale() const override {
-    if (!hwnd_) {
+    if (hwnd_) {
+      HMODULE u32 = GetModuleHandleW(L"user32.dll");
+      using GetDpiForWindowFn = UINT (WINAPI*)(HWND);
+      auto pGetDpiForWindow = reinterpret_cast<GetDpiForWindowFn>(
+          GetProcAddress(u32, "GetDpiForWindow"));
+      if (pGetDpiForWindow) {
+        UINT dpi = pGetDpiForWindow(hwnd_);
+        if (dpi == 0) dpi = 96;
+        return dpi / 96.0f;
+      }
+      HDC hdc = GetDC(hwnd_);
+      int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+      ReleaseDC(hwnd_, hdc);
+      return dpiX / 96.0f;
+    } else {
       HDC screen = GetDC(nullptr);
       int dpiX = (screen ? GetDeviceCaps(screen, LOGPIXELSX) : 96);
       if (screen) ReleaseDC(nullptr, screen);
       return dpiX / 96.0f;
     }
-    HDC hdc = GetDC(hwnd_);
-    int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
-    ReleaseDC(hwnd_, hdc);
-    return dpiX / 96.0f;
   }
 
   void on_paint(PaintCB cb) override {
@@ -66,6 +85,7 @@ public:
   void show() {
     ShowWindow(hwnd_, SW_SHOW);
     UpdateWindow(hwnd_);
+    SetFocus(hwnd_);
   }
 
 private:
@@ -105,16 +125,19 @@ private:
       case WM_MOUSEWHEEL:
       case WM_KEYDOWN:
       case WM_KEYUP:
-      {
+      case WM_CHAR: {
         if (self && self->input_cb_) {
           ui::InputEvent ev{};
-
+          // координаты клиента для мыши
           POINT pt{};
           if (msg == WM_MOUSEWHEEL) {
             POINT scr{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hWnd, &scr);
             pt = scr;
-          } else {
+          } else if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP ||
+                     msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
+                     msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP ||
+                     msg == WM_MOUSEMOVE) {
             pt.x = GET_X_LPARAM(lParam);
             pt.y = GET_Y_LPARAM(lParam);
           }
@@ -122,13 +145,20 @@ private:
           ev.pos.y = static_cast<float>(pt.y);
 
           switch (msg) {
-            case WM_LBUTTONDOWN: ev.type = ui::InputEvent::MouseDown; ev.keycode = VK_LBUTTON; break;
-            case WM_LBUTTONUP:   ev.type = ui::InputEvent::MouseUp;   ev.keycode = VK_LBUTTON; break;
+            case WM_LBUTTONDOWN:
+              SetFocus(hWnd);
+              SetCapture(hWnd);
+              ev.type = ui::InputEvent::MouseDown; ev.keycode = VK_LBUTTON; break;
+            case WM_LBUTTONUP:
+              ReleaseCapture();
+              ev.type = ui::InputEvent::MouseUp;   ev.keycode = VK_LBUTTON; break;
+
             case WM_RBUTTONDOWN: ev.type = ui::InputEvent::MouseDown; ev.keycode = VK_RBUTTON; break;
             case WM_RBUTTONUP:   ev.type = ui::InputEvent::MouseUp;   ev.keycode = VK_RBUTTON; break;
             case WM_MBUTTONDOWN: ev.type = ui::InputEvent::MouseDown; ev.keycode = VK_MBUTTON; break;
             case WM_MBUTTONUP:   ev.type = ui::InputEvent::MouseUp;   ev.keycode = VK_MBUTTON; break;
             case WM_MOUSEMOVE:   ev.type = ui::InputEvent::MouseMove; ev.keycode = 0;          break;
+
             case WM_MOUSEWHEEL: {
               ev.type = ui::InputEvent::Scroll;
               const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
@@ -136,14 +166,50 @@ private:
               ev.keycode = 0;
               break;
             }
-            case WM_KEYDOWN:     ev.type = ui::InputEvent::KeyDown;  ev.keycode = static_cast<int>(wParam); break;
-            case WM_KEYUP:       ev.type = ui::InputEvent::KeyUp;    ev.keycode = static_cast<int>(wParam); break;
-            default:             ev.type = ui::InputEvent::MouseMove; ev.keycode = 0; break;
+
+            case WM_KEYDOWN:
+              if (wParam == VK_BACK) return 0;
+              ev.type = ui::InputEvent::KeyDown;
+              ev.keycode = static_cast<int>(wParam); // VK_*
+              break;
+
+            case WM_KEYUP:
+              if (wParam == VK_BACK) return 0;
+              ev.type = ui::InputEvent::KeyUp;
+              ev.keycode = static_cast<int>(wParam);
+              break;
+
+            case WM_CHAR: {
+              wchar_t wc = static_cast<wchar_t>(wParam);
+              if (wc == 8) {
+                ev.type = ui::InputEvent::KeyDown;
+                ev.keycode = 8; // VK_BACK
+                ev.text.clear();
+              } else if (wc == L'\r' || wc == L'\n') {
+                return 0;
+              } else {
+                char utf8[4];
+                int len = WideCharToMultiByte(CP_UTF8, 0, &wc, 1, utf8, 4, nullptr, nullptr);
+                if (len > 0) ev.text.assign(utf8, utf8 + len);
+                ev.type = ui::InputEvent::KeyDown;
+                ev.keycode = 0;
+              }
+              break;
+            }
           }
 
           self->input_cb_(ev);
         }
-        break;
+        return 0;
+      }
+
+      case WM_DPICHANGED: {
+        // RECT* suggested = reinterpret_cast<RECT*>(lParam);
+        // SetWindowPos(hWnd, nullptr, suggested->left, suggested->top,
+        //              suggested->right - suggested->left,
+        //              suggested->bottom - suggested->top,
+        //              SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
       }
 
       case WM_DESTROY:
@@ -181,9 +247,14 @@ private:
   void create_window(int width, int height, const std::wstring& title) {
     HINSTANCE hInst = GetModuleHandleW(nullptr);
 
+    RECT rc{0,0,width,height};
+    AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
+
     hwnd_ = CreateWindowExW(
       0, kClassName(), title.c_str(), WS_OVERLAPPEDWINDOW,
-      CW_USEDEFAULT, CW_USEDEFAULT, width, height,
+      CW_USEDEFAULT, CW_USEDEFAULT, w, h,
       nullptr, nullptr, hInst, this
     );
 
