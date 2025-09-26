@@ -29,25 +29,38 @@ public:
 
   void on_click(std::function<void()> fn) { click_handlers_.push_back(std::move(fn)); }
 
-  void handle_mouse_move(Point p) {
-    hovered_ = contains(p);
-    if (hovered_ != last_hovered_) last_hovered_ = hovered_;
-  }
-
-  void handle_mouse_down(Point p, MouseButton b) {
-    if (b == MouseButton::Left) {
-      pressed_ = contains(p);
+  bool handle_mouse_move(Point p) {
+    bool new_hover = contains(p);
+    if (new_hover != hovered_) {
+      hovered_ = new_hover;
+      return true;
     }
+    return false;
   }
 
-  void handle_mouse_up(Point p, MouseButton b) {
-    if (b == MouseButton::Left) {
-      const bool was_pressed = pressed_;
+  bool handle_mouse_down(Point p, MouseButton b) {
+    if (b != MouseButton::Left) return false;
+    bool new_pressed = contains(p);
+    if (new_pressed != pressed_) {
+      pressed_ = new_pressed;
+      return true;
+    }
+    return false;
+  }
+
+  bool handle_mouse_up(Point p, MouseButton b) {
+    if (b != MouseButton::Left) return false;
+    bool was_pressed = pressed_;
+    bool need_redraw = false;
+    if (pressed_) {
       pressed_ = false;
-      if (was_pressed && contains(p)) {
-        for (auto &fn : click_handlers_) if (fn) fn();
-      }
+      need_redraw = true;
     }
+    if (was_pressed && contains(p)) {
+      for (auto &fn : click_handlers_) if (fn) fn();
+      need_redraw = true;
+    }
+    return need_redraw;
   }
 
   void paint(Canvas& g) {
@@ -74,7 +87,7 @@ private:
   std::string text_;
   ButtonStyle style_{};
 
-  bool hovered_{false}, last_hovered_{false}, pressed_{false};
+  bool hovered_{false}, pressed_{false};
   std::vector<std::function<void()>> click_handlers_;
 };
 
