@@ -169,8 +169,7 @@ public:
 
   bool handle_keydown(int keycode, const std::string& text_utf8) {
     bool changed = false;
-
-    if (text_utf8 == "\b") {
+    if (text_utf8 == "\b" || keycode == 8) {
       if (focused_ && caret_cp_ > 0) {
         const int byte_end   = utf8_byte_offset(text_, caret_cp_);
         const int byte_start = utf8_prev_cp_byte(text_, byte_end);
@@ -180,19 +179,6 @@ public:
         return true;
       }
       return false;
-    }
-
-    // Backspace (Win=8, macOS=51)
-    if (keycode == 8 || keycode == 51) {
-      if (focused_ && caret_cp_ > 0) {
-        const int byte_end   = utf8_byte_offset(text_, caret_cp_);
-        const int byte_start = utf8_prev_cp_byte(text_, byte_end);
-        text_.erase(byte_start, byte_end - byte_start);
-        caret_cp_ -= 1;
-        invalidate_metrics_ = true;
-        changed = true;
-      }
-      return changed;
     }
 
     if (text_utf8 == "\n" || text_utf8 == "\r")

@@ -106,7 +106,8 @@ using pulseui::ui::InputEvent;
   if (sel == @selector(deleteBackward:)) {
     InputEvent ev{};
     ev.type = InputEvent::KeyDown;
-    ev.keycode = 51;
+    ev.keycode = 8;
+    ev.text.clear();
     (*inputCB)(ev);
     return;
   }
