@@ -30,6 +30,7 @@ public:
   }
 
   ~Win32Window() override {
+    destroy_back_buffer();
     if (hwnd_) DestroyWindow(hwnd_);
   }
 
@@ -41,6 +42,7 @@ public:
 
   void invalidate() override {
     if (!hwnd_) return;
+    // We don't ask to erase the background (FALSE) - we completely cover it ourselves.
     InvalidateRect(hwnd_, nullptr, FALSE);
   }
 
@@ -84,12 +86,48 @@ public:
 
   void show() {
     ShowWindow(hwnd_, SW_SHOW);
+    // Synchronous drawing is allowed: the background is not erased by the system, we draw from the back buffer.
     UpdateWindow(hwnd_);
     SetFocus(hwnd_);
   }
 
 private:
   static const wchar_t* kClassName() { return L"PulseUIWindow"; }
+
+  // ---- Back buffer management ----
+  void destroy_back_buffer() {
+    if (memdc_) {
+      // memdc_ was created via CreateCompatibleDC, it doesn't have an "old object",
+      // because we always selected our bitmap and there's nothing to reselect when deleting.
+      DeleteDC(memdc_);
+      memdc_ = nullptr;
+    }
+    if (backbmp_) {
+      DeleteObject(backbmp_);
+      backbmp_ = nullptr;
+    }
+    back_size_.cx = back_size_.cy = 0;
+  }
+
+  void ensure_back_buffer(int w, int h, HDC ref) {
+    if (w <= 0 || h <= 0) return;
+
+    if (!memdc_) {
+      memdc_ = CreateCompatibleDC(ref);
+    }
+
+    if (!backbmp_ || back_size_.cx != w || back_size_.cy != h) {
+      if (backbmp_) {
+        DeleteObject(backbmp_);
+        backbmp_ = nullptr;
+      }
+      backbmp_ = CreateCompatibleBitmap(ref, w, h);
+      back_size_.cx = w;
+      back_size_.cy = h;
+
+      SelectObject(memdc_, backbmp_);
+    }
+  }
 
   static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     Win32Window* self = nullptr;
@@ -103,14 +141,50 @@ private:
     }
 
     switch (msg) {
+      // Prevent the system from erasing the background: this eliminates the "glow" of a clear background.
+      case WM_ERASEBKGND:
+        return 1;
+
+      case WM_SIZE: {
+        if (self) {
+          int W = LOWORD(lParam);
+          int H = HIWORD(lParam);
+          HDC hdc = GetDC(hWnd);
+          self->ensure_back_buffer(W, H, hdc);
+          ReleaseDC(hWnd, hdc);
+        }
+        return 0;
+      }
+
       case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
-        if (self && self->paint_cb_) {
-          pulseui::platform::GdiCanvas gdi(hdc);
-          ui::Canvas& canvas = gdi;
-          self->paint_cb_(canvas);
+
+        RECT client; GetClientRect(hWnd, &client);
+        const int W = client.right - client.left;
+        const int H = client.bottom - client.top;
+
+        if (self) {
+          self->ensure_back_buffer(W, H, hdc);
+
+          if (self->paint_cb_) {
+            pulseui::platform::GdiCanvas gdi(self->memdc_ ? self->memdc_ : hdc);
+            ui::Canvas& canvas = gdi;
+
+            self->paint_cb_(canvas);
+          }
+
+          if (self->memdc_ && self->backbmp_) {
+            BitBlt(hdc,
+                   ps.rcPaint.left, ps.rcPaint.top,
+                   ps.rcPaint.right - ps.rcPaint.left,
+                   ps.rcPaint.bottom - ps.rcPaint.top,
+                   self->memdc_,
+                   ps.rcPaint.left, ps.rcPaint.top,
+                   SRCCOPY);
+          }
         }
+
         EndPaint(hWnd, &ps);
         return 0;
       }
@@ -128,7 +202,7 @@ private:
       case WM_CHAR: {
         if (self && self->input_cb_) {
           ui::InputEvent ev{};
-          // координаты клиента для мыши
+          
           POINT pt{};
           if (msg == WM_MOUSEWHEEL) {
             POINT scr{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -204,11 +278,6 @@ private:
       }
 
       case WM_DPICHANGED: {
-        // RECT* suggested = reinterpret_cast<RECT*>(lParam);
-        // SetWindowPos(hWnd, nullptr, suggested->left, suggested->top,
-        //              suggested->right - suggested->left,
-        //              suggested->bottom - suggested->top,
-        //              SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
       }
 
@@ -228,7 +297,7 @@ private:
 
     WNDCLASSEXW wc{};
     wc.cbSize        = sizeof(wc);
-    wc.style         = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
+    wc.style         = CS_OWNDC;
     wc.lpfnWndProc   = &Win32Window::WndProc;
     wc.cbClsExtra    = 0;
     wc.cbWndExtra    = 0;
@@ -236,7 +305,7 @@ private:
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     wc.hIcon         = nullptr;
     wc.hIconSm       = nullptr;
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = nullptr;
     wc.lpszMenuName  = nullptr;
     wc.lpszClassName = kClassName();
 
@@ -259,12 +328,27 @@ private:
     );
 
     SetWindowTextW(hwnd_, title.c_str());
+
+    // Create a starting back buffer of the current size.
+    if (hwnd_) {
+      RECT client; GetClientRect(hwnd_, &client);
+      int W = client.right - client.left;
+      int H = client.bottom - client.top;
+      HDC hdc = GetDC(hwnd_);
+      ensure_back_buffer(W, H, hdc);
+      ReleaseDC(hwnd_, hdc);
+    }
   }
 
 private:
   HWND hwnd_{nullptr};
   ui::Window::PaintCB paint_cb_{};
   ui::Window::InputCB input_cb_{};
+
+  // Back buffer
+  HDC     memdc_{nullptr};
+  HBITMAP backbmp_{nullptr};
+  SIZE    back_size_{0,0};
 };
 
 std::unique_ptr<ui::Window> make_win32_window(int width, int height, const std::string& title_utf8) {
