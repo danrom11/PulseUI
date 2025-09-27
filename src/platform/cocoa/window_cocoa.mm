@@ -103,16 +103,61 @@ using pulseui::ui::InputEvent;
 - (void)doCommandBySelector:(SEL)sel {
   if (!inputCB) return;
 
-  if (sel == @selector(deleteBackward:)) {
+  auto sendKey = [&](int keycode){
     InputEvent ev{};
     ev.type = InputEvent::KeyDown;
-    ev.keycode = 8;
+    ev.keycode = keycode;
     ev.text.clear();
     (*inputCB)(ev);
+  };
+
+  if (sel == @selector(deleteBackward:)) {
+    sendKey(8);                      // macOS backspace FIXME code
     return;
   }
 
-  if (sel == @selector(insertNewline:) || sel == @selector(insertLineBreak:)) {
+  // Delete Forward (Fn+Backspace)
+  if (sel == @selector(deleteForward:) ||
+      sel == @selector(deleteWordForward:)) {
+    sendKey(117);                    // macOS DeleteForward
+    return;
+  }
+
+  if (sel == @selector(moveLeft:) ||
+      sel == @selector(moveWordLeft:) ||
+      sel == @selector(moveBackward:) ||
+      sel == @selector(moveLeftAndModifySelection:) ||
+      sel == @selector(moveWordLeftAndModifySelection:)) {
+    sendKey(123);                    // macOS Left
+    return;
+  }
+
+  if (sel == @selector(moveRight:) ||
+      sel == @selector(moveWordRight:) ||
+      sel == @selector(moveForward:) ||
+      sel == @selector(moveRightAndModifySelection:) ||
+      sel == @selector(moveWordRightAndModifySelection:)) {
+    sendKey(124);                    // macOS Right
+    return;
+  }
+
+  if (sel == @selector(moveToBeginningOfLine:) ||
+      sel == @selector(moveToBeginningOfParagraph:) ||
+      sel == @selector(moveToBeginningOfDocument:)) {
+    sendKey(115);                    // macOS Home
+    return;
+  }
+
+  if (sel == @selector(moveToEndOfLine:) ||
+      sel == @selector(moveToEndOfParagraph:) ||
+      sel == @selector(moveToEndOfDocument:)) {
+    sendKey(119);                    // macOS End
+    return;
+  }
+
+  if (sel == @selector(insertNewline:) ||
+      sel == @selector(insertLineBreak:) ||
+      sel == @selector(insertParagraphSeparator:)) {
     return;
   }
 
