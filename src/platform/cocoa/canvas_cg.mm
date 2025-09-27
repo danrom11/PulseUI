@@ -62,6 +62,12 @@ public:
     }
   }
 
+  ui::Rect bounds() const override {
+    CGRect r = CGContextGetClipBoundingBox(ctx_);
+    return ui::Rect{ (float)r.origin.x, (float)r.origin.y,
+                              (float)r.size.width, (float)r.size.height };
+  }
+
 private:
   CGContextRef ctx_{};
   float dpi_{1.f};

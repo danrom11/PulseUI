@@ -2,6 +2,7 @@
 #include <string>
 #include <pulseui/ui/input.hpp>
 #include <pulseui/ui/canvas.hpp>
+#include <pulseui/ui/widget.hpp>
 
 namespace pulseui::ui {
 
@@ -20,21 +21,19 @@ struct LabelStyle {
   AlignV align_v = AlignV::Center;
 };
 
-class Label {
+class Label : public Widget {
 public:
   Label() = default;
   Label(Rect rect, std::string text)
-    : rect_(rect), text_(std::move(text)) {}
+    : text_(std::move(text)) { rect_ = rect; }
 
-  Label& set_rect(Rect r)          { rect_ = r; return *this; }
   Label& set_text(std::string txt) { text_ = std::move(txt); return *this; }
   Label& set_style(LabelStyle s)   { style_ = std::move(s);   return *this; }
 
-  const Rect&       rect()  const { return rect_; }
   const std::string& text() const { return text_; }
   const LabelStyle&  style() const{ return style_; }
 
-  void paint(Canvas& g) {
+  void paint(Canvas& g) override {
     if (style_.opaque) {
       g.fill_rect(rect_, style_.bg);
     }
@@ -45,25 +44,18 @@ public:
     const float inner_h = rect_.h - style_.padding_px * 2.f;
 
     float text_baseline_y = inner_y;
-
     const float ascent_est = style_.font.size * 0.8f;
     const float descent_est = style_.font.size * 0.2f;
+
     switch (style_.align_v) {
-      case AlignV::Top:
-        text_baseline_y = inner_y + ascent_est;
-        break;
-      case AlignV::Center:
-        text_baseline_y = inner_y + inner_h * 0.5f + (ascent_est - descent_est) * 0.5f;
-        break;
-      case AlignV::Bottom:
-        text_baseline_y = inner_y + inner_h - descent_est;
-        break;
+      case AlignV::Top:    text_baseline_y = inner_y + ascent_est; break;
+      case AlignV::Center: text_baseline_y = inner_y + inner_h*0.5f + (ascent_est - descent_est)*0.5f; break;
+      case AlignV::Bottom: text_baseline_y = inner_y + inner_h - descent_est; break;
     }
 
     float text_x = inner_x;
     if (style_.align_h == AlignH::Center) {
-      text_x = inner_x + inner_w * 0.5f;
-      text_x -= style_.padding_px;
+      text_x = inner_x + inner_w*0.5f - style_.padding_px;
     } else if (style_.align_h == AlignH::Right) {
       text_x = inner_x + inner_w - style_.padding_px;
     }
@@ -71,12 +63,11 @@ public:
     g.draw_text({text_x, text_baseline_y}, text_, style_.font, style_.fg);
   }
 
-  bool handle_mouse_move(Point)                   { return false; }
-  bool handle_mouse_down(Point, MouseButton)      { return false; }
-  bool handle_mouse_up(Point, MouseButton)        { return false; }
+  bool handle_mouse_move(Point) override { return false; }
+  bool handle_mouse_down(Point, MouseButton) override { return false; }
+  bool handle_mouse_up(Point, MouseButton) override { return false; }
 
 private:
-  Rect        rect_{};
   std::string text_;
   LabelStyle  style_{};
 };

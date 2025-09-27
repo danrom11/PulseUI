@@ -10,6 +10,9 @@
 #include <pulseui/ui/window.hpp>
 #include <pulseui/ui/canvas.hpp>
 #include <pulseui/ui/input.hpp>
+#include <pulseui/ui/container.hpp>
+#include <pulseui/ui/row.hpp>
+#include <pulseui/ui/column.hpp>
 #include <pulseui/ui/layout.hpp>
 #include <pulseui/ui/widget.hpp>
 #include <pulseui/ui/button.hpp>

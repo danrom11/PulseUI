@@ -71,6 +71,13 @@ public:
     return (float)sz.cx;
   }
 
+  Rect bounds() const override {
+    RECT rc{};
+    GetClipBox(hdc_, &rc);
+    return ui::Rect{ (float)rc.left, (float)rc.top,
+                     (float)(rc.right - rc.left), (float)(rc.bottom - rc.top) };
+  }
+
 private:
   static COLORREF to_colorref(const ui::Color& c) {
     auto clamp = [](float v){ return (BYTE)(v < 0 ? 0 : v > 1 ? 255 : (int)(v*255 + 0.5f)); };

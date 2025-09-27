@@ -4,6 +4,7 @@
 #include <vector>
 #include <pulseui/ui/input.hpp>
 #include <pulseui/ui/canvas.hpp>
+#include <pulseui/ui/widget.hpp>
 
 namespace pulseui::ui {
 
@@ -18,52 +19,17 @@ struct ButtonStyle {
   float padding_px = 12.f;
 };
 
-class Button {
+class Button : public Widget {
 public:
   Button(Rect rect, std::string text)
-    : rect_(rect), text_(std::move(text)) {}
+    : text_(std::move(text)) { rect_ = rect; }
 
-  Button& set_rect(Rect r)         { rect_ = r; return *this; }
   Button& set_text(std::string t)  { text_ = std::move(t); return *this; }
   Button& set_style(ButtonStyle s) { style_ = std::move(s); return *this; }
 
   void on_click(std::function<void()> fn) { click_handlers_.push_back(std::move(fn)); }
 
-  bool handle_mouse_move(Point p) {
-    bool new_hover = contains(p);
-    if (new_hover != hovered_) {
-      hovered_ = new_hover;
-      return true;
-    }
-    return false;
-  }
-
-  bool handle_mouse_down(Point p, MouseButton b) {
-    if (b != MouseButton::Left) return false;
-    bool new_pressed = contains(p);
-    if (new_pressed != pressed_) {
-      pressed_ = new_pressed;
-      return true;
-    }
-    return false;
-  }
-
-  bool handle_mouse_up(Point p, MouseButton b) {
-    if (b != MouseButton::Left) return false;
-    bool was_pressed = pressed_;
-    bool need_redraw = false;
-    if (pressed_) {
-      pressed_ = false;
-      need_redraw = true;
-    }
-    if (was_pressed && contains(p)) {
-      for (auto &fn : click_handlers_) if (fn) fn();
-      need_redraw = true;
-    }
-    return need_redraw;
-  }
-
-  void paint(Canvas& g) {
+  void paint(Canvas& g) override {
     const Color bg = pressed_ ? style_.bg_down : (hovered_ ? style_.bg_hover : style_.bg_normal);
     g.fill_rect(rect_, bg);
 
@@ -72,8 +38,33 @@ public:
       g.fill_rect(Rect{rect_.x, rect_.y + rect_.h - 1, rect_.w, 1}, mul(bg, 1.2f));
     }
 
-    const float baseline = rect_.y + rect_.h * 0.5f - style_.font.size * 0.35f;
+    const float baseline = rect_.y + rect_.h*0.5f - style_.font.size*0.35f;
     g.draw_text(Point{rect_.x + style_.padding_px, baseline}, text_, style_.font, style_.fg);
+  }
+
+  bool handle_mouse_move(Point p) override {
+    bool new_hover = contains(p);
+    if (new_hover != hovered_) { hovered_ = new_hover; return true; }
+    return false;
+  }
+
+  bool handle_mouse_down(Point p, MouseButton b) override {
+    if (b != MouseButton::Left) return false;
+    bool new_pressed = contains(p);
+    if (new_pressed != pressed_) { pressed_ = new_pressed; return true; }
+    return false;
+  }
+
+  bool handle_mouse_up(Point p, MouseButton b) override {
+    if (b != MouseButton::Left) return false;
+    bool was_pressed = pressed_;
+    bool need_redraw = false;
+    if (pressed_) { pressed_ = false; need_redraw = true; }
+    if (was_pressed && contains(p)) {
+      for (auto &fn : click_handlers_) if (fn) fn();
+      need_redraw = true;
+    }
+    return need_redraw;
   }
 
 private:
@@ -82,8 +73,6 @@ private:
            p.y >= rect_.y && p.y <= rect_.y + rect_.h;
   }
 
-private:
-  Rect    rect_{};
   std::string text_;
   ButtonStyle style_{};
 

@@ -14,6 +14,8 @@ namespace pulseui::ui {
     virtual void draw_text(Point p, std::string_view text, const Font& f, Color c) = 0;
 
     virtual float text_width(std::string_view text, const Font& f) const = 0;
+    
+    virtual Rect bounds() const = 0;
   };
 
 } // namespace pulseui::ui
