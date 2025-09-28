@@ -71,7 +71,7 @@ public:
     return (float)sz.cx;
   }
 
-  Rect bounds() const override {
+  ui::Rect bounds() const override {
     RECT rc{};
     GetClipBox(hdc_, &rc);
     return ui::Rect{ (float)rc.left, (float)rc.top,
