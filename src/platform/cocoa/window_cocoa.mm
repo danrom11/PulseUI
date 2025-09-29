@@ -224,6 +224,40 @@ public:
   void on_paint(PaintCB cb) override { *paint_holder_ = std::move(cb); [view_ setNeedsDisplay:YES]; }
   void on_input(InputCB cb) override { *input_holder_ = std::move(cb); }
 
+  void set_visible(bool visible) override {
+    @autoreleasepool {
+      if (!window_) return;
+      if (visible) {
+        [window_ makeKeyAndOrderFront:nil];
+      } else {
+        [window_ orderOut:nil];
+      }
+    }
+  }
+
+  void show() override {
+    @autoreleasepool {
+      if (!window_) return;
+      [window_ makeKeyAndOrderFront:nil];
+    }
+  }
+
+  void hide() override {
+    @autoreleasepool {
+      if (!window_) return;
+      [window_ orderOut:nil];
+    }
+  }
+
+  void close() override {
+    @autoreleasepool {
+      if (!window_) return;
+      [window_ performClose:nil];
+      window_ = nil;
+      view_ = nil;
+    }
+  }
+
 private:
   NSWindow*  window_{nil};
   PulseView* view_{nil};

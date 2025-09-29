@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <utility>
+#include <atomic>
 
 #include <pulseui/ui/window.hpp>
 #include <pulseui/ui/canvas.hpp>
@@ -13,6 +14,8 @@
 #include "canvas_gdi.hpp"
 
 namespace pulseui::platform {
+
+static std::atomic<int> g_window_count{0};
 
 static std::wstring widen_utf8(std::string_view s) {
   if (s.empty()) return {};
@@ -27,11 +30,15 @@ public:
   Win32Window(int width, int height, std::string_view title_utf8) {
     register_class();
     create_window(width, height, widen_utf8(title_utf8));
+    g_window_count.fetch_add(1, std::memory_order_relaxed);
   }
 
   ~Win32Window() override {
     destroy_back_buffer();
     if (hwnd_) DestroyWindow(hwnd_);
+    if (g_window_count.fetch_sub(1, std::memory_order_relaxed) == 1) {
+      PostQuitMessage(0);
+    }
   }
 
   // === ui::Window overrides ===
@@ -78,17 +85,38 @@ public:
     input_cb_ = std::move(cb);
   }
 
-  void set_size(int width, int height) {
+  void set_visible(bool visible) override {
     if (!hwnd_) return;
-    SetWindowPos(hwnd_, nullptr, 0, 0, width, height,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(hwnd_, visible ? SW_SHOW : SW_HIDE);
+    if (visible) { UpdateWindow(hwnd_); SetFocus(hwnd_); }
   }
 
-  void show() {
+  void show() override {
+    if (!hwnd_) return;
     ShowWindow(hwnd_, SW_SHOW);
     // Synchronous drawing is allowed: the background is not erased by the system, we draw from the back buffer.
     UpdateWindow(hwnd_);
     SetFocus(hwnd_);
+  }
+
+  void hide() override {
+    if (!hwnd_) return;
+    ShowWindow(hwnd_, SW_HIDE);
+  }
+
+  void close() override {
+    if(!hwnd_) return;
+    DestroyWindow(hwnd_);
+    hwnd_ = nullptr;
+    if(g_window_count.fetch_sub(1, std::memory_order_relaxed) == 1){
+      PostQuitMessage(0);
+    }
+  }
+
+  void set_size(int width, int height) {
+    if (!hwnd_) return;
+    SetWindowPos(hwnd_, nullptr, 0, 0, width, height,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
   }
 
 private:

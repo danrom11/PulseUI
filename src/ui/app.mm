@@ -17,4 +17,7 @@ namespace pulseui::platform {
   void app_run() {
     [NSApp run];
   }
+  void app_quit(int /*exit_code*/) {
+    [NSApp terminate:nil];
+  }
 }

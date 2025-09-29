@@ -15,5 +15,10 @@ namespace pulseui::ui {
     virtual float dpi_scale() const = 0;
     virtual void on_paint(PaintCB) = 0;
     virtual void on_input(InputCB) = 0;
+    [[deprecated("Use the show() and hide() methods")]]
+    virtual void set_visible(bool visible) = 0;
+    virtual void show() = 0;
+    virtual void hide() = 0;
+    virtual void close() = 0;
   };
 }

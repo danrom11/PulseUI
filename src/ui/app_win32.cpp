@@ -22,4 +22,8 @@ void app_run() {
   }
 }
 
+void app_quit(int exit_code) {
+  PostQuitMessage(exit_code);
+}
+
 } // namespace pulseui::platform

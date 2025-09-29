@@ -11,5 +11,6 @@ namespace pulseui::platform {
 
   void app_init();
   void app_run();
+  void app_quit(int exit_code = 0);
 }
 
