@@ -19,5 +19,6 @@
 #include <pulseui/ui/label.hpp>
 #include <pulseui/ui/text_field.hpp>
 #include <pulseui/ui/click_surface.hpp>
+#include <pulseui/ui/checkbox.hpp>
 
 #include <pulseui/platform/platform.hpp>

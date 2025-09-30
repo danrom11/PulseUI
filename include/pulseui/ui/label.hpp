@@ -15,7 +15,7 @@ struct LabelStyle {
   bool  opaque = false;
 
   Font  font{16.f};
-  float padding_px = 8.f;
+  float padding_px = 0.f; //TODO: Make it possible to set padding
 
   AlignH align_h = AlignH::Left;
   AlignV align_v = AlignV::Center;
