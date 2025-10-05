@@ -1,0 +1,15 @@
+#pragma once
+#define PULSEUI_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define PULSEUI_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define PULSEUI_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define PULSEUI_VERSION_CODE  ((PULSEUI_VERSION_MAJOR << 16) | (PULSEUI_VERSION_MINOR << 8) | (PULSEUI_VERSION_PATCH))
+#define PULSEUI_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace pulseui {
+struct version {
+  static constexpr int major = PULSEUI_VERSION_MAJOR;
+  static constexpr int minor = PULSEUI_VERSION_MINOR;
+  static constexpr int patch = PULSEUI_VERSION_PATCH;
+  static constexpr const char* string = PULSEUI_VERSION_STRING;
+};
+}

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PulseUI LANGUAGES CXX OBJCXX)
+project(PulseUI VERSION 0.0.1 LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,12 +10,16 @@ set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(PULSE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(PULSE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.hpp.in
+  ${CMAKE_CURRENT_BINARY_DIR}/include/pulseui/config.hpp
+  @ONLY
+)
+
 # ------------------------------------------------------------------
 # Options
 # ------------------------------------------------------------------
-# Platform backend selection: cocoa|win32 (default: OS)
 option(PULSEUI_BACKEND "Backend to use (cocoa|win32)" "")
-
 option(PULSEUI_FETCH_PULSE "Fetch Pulse library automatically" ON)
 
 # ------------------------------------------------------------------
@@ -34,17 +38,20 @@ endif()
 # ------------------------------------------------------------------
 # PulseUI Public Headers
 # ------------------------------------------------------------------
-# Unified Interface UI Header Library
 if(NOT TARGET PulseUI_ui)
   add_library(PulseUI_ui INTERFACE)
-  target_include_directories(PulseUI_ui INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
   add_library(PulseUI::ui ALIAS PulseUI_ui)
+
+  target_include_directories(PulseUI_ui
+    INTERFACE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+  )
 endif()
 
 # ------------------------------------------------------------------
-# Platform backends (no duplicate goals)
+# Platform backends
 # ------------------------------------------------------------------
 
 # ---- macOS Cocoa ----
@@ -57,22 +64,31 @@ if(APPLE AND NOT TARGET PulseUI_platform_cocoa)
     src/platform/cocoa/executor_cocoa.mm
     src/platform/cocoa/timers_cocoa.mm
   )
+
   target_link_libraries(PulseUI_platform_cocoa
-    PUBLIC PulseUI::ui
-            "-framework AppKit"
-            "-framework CoreGraphics"
-            "-framework CoreText"
-            "-framework QuartzCore"
-            "-framework Foundation"
+    PUBLIC
+      PulseUI::ui
+      "-framework AppKit"
+      "-framework CoreGraphics"
+      "-framework CoreText"
+      "-framework QuartzCore"
+      "-framework Foundation"
   )
-  # Without GNU ObjC++ extensions
+
   set_target_properties(PulseUI_platform_cocoa PROPERTIES
     OBJCXX_EXTENSIONS OFF
   )
-  
+
   target_compile_options(PulseUI_platform_cocoa PRIVATE
     -fobjc-arc
     -fobjc-arc-exceptions
+  )
+
+  target_include_directories(PulseUI_platform_cocoa
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+      $<INSTALL_INTERFACE:include>
   )
 endif()
 
@@ -84,9 +100,14 @@ if(WIN32 AND NOT TARGET PulseUI_platform_win32)
     src/platform/win32/window_win32.cpp
     src/platform/win32/executor_win32.cpp
   )
-  target_link_libraries(PulseUI_platform_win32 PUBLIC PulseUI::ui)
-  # Системные библиотеки
-  target_link_libraries(PulseUI_platform_win32 PUBLIC user32 gdi32)
+  target_link_libraries(PulseUI_platform_win32 PUBLIC PulseUI::ui user32 gdi32)
+
+  target_include_directories(PulseUI_platform_win32
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+  )
 endif()
 
 # ------------------------------------------------------------------
@@ -103,7 +124,6 @@ elseif(PULSEUI_BACKEND STREQUAL "win32")
   endif()
   add_library(PulseUI_platform ALIAS PulseUI_platform_win32)
 else()
-  # Auto-select by OS
   if(APPLE)
     if(NOT TARGET PulseUI_platform_cocoa)
       message(FATAL_ERROR "macOS detected but Cocoa backend is missing.")
@@ -120,7 +140,7 @@ else()
 endif()
 
 # ------------------------------------------------------------------
-# PulseUI Summary Interface Target
+# Summary interface target
 # ------------------------------------------------------------------
 if(NOT TARGET PulseUI)
   add_library(PulseUI INTERFACE)
@@ -128,8 +148,69 @@ endif()
 target_link_libraries(PulseUI INTERFACE PulseUI_platform)
 add_library(PulseUI::PulseUI ALIAS PulseUI)
 
-# It is necessary that consumers via PulseUI also see Pulse
-# target_link_libraries(PulseUI INTERFACE pulse)
+# ------------------------------------------------------------------
+# INSTALL / PACKAGE
+# ------------------------------------------------------------------
+include(CMakePackageConfigHelpers)
+
+set(PULSEUI_CMAKE_INSTALL_DIR "lib/cmake/PulseUI")
+
+set(PULSEUI_INSTALL_TARGETS PulseUI_ui PulseUI)
+if(TARGET PulseUI_platform_cocoa)
+  list(APPEND PULSEUI_INSTALL_TARGETS PulseUI_platform_cocoa)
+endif()
+if(TARGET PulseUI_platform_win32)
+  list(APPEND PULSEUI_INSTALL_TARGETS PulseUI_platform_win32)
+endif()
+
+install(TARGETS ${PULSEUI_INSTALL_TARGETS}
+  EXPORT PulseUITargets
+  ARCHIVE       DESTINATION lib
+  LIBRARY       DESTINATION lib
+  RUNTIME       DESTINATION bin
+  INCLUDES      DESTINATION include
+)
+
+install(DIRECTORY include/ DESTINATION include)
+install(FILES
+  ${CMAKE_CURRENT_BINARY_DIR}/include/pulseui/config.hpp
+  DESTINATION include/pulseui
+)
+
+export(EXPORT PulseUITargets
+  FILE "${CMAKE_CURRENT_BINARY_DIR}/PulseUITargets.cmake"
+  NAMESPACE PulseUI::
+)
+
+set(PULSEUI_CONFIG_IN   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PulseUIConfig.cmake.in")
+set(PULSEUI_WARNINGS_IN "${CMAKE_CURRENT_SOURCE_DIR}/cmake/compiler_warnings.cmake")
+
+set(PACKAGE_CMAKE_INSTALL_DIR "${PULSEUI_CMAKE_INSTALL_DIR}")
+set(PACKAGE_INCLUDE_INSTALL_DIR "include")
+
+configure_package_config_file(
+  "${PULSEUI_CONFIG_IN}"
+  "${CMAKE_CURRENT_BINARY_DIR}/PulseUIConfig.cmake"
+  INSTALL_DESTINATION "${PULSEUI_CMAKE_INSTALL_DIR}"
+)
+
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/PulseUIConfigVersion.cmake"
+  VERSION "${PROJECT_VERSION}"
+  COMPATIBILITY SameMajorVersion
+)
+
+install(FILES
+  "${CMAKE_CURRENT_BINARY_DIR}/PulseUIConfig.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/PulseUIConfigVersion.cmake"
+  "${PULSEUI_WARNINGS_IN}"
+  DESTINATION "${PULSEUI_CMAKE_INSTALL_DIR}"
+)
+
+install(EXPORT PulseUITargets
+  NAMESPACE PulseUI::
+  DESTINATION ${PULSEUI_CMAKE_INSTALL_DIR}
+)
 
 # ------------------------------------------------------------------
 # Examples
@@ -142,3 +223,5 @@ add_subdirectory(examples/04_example_text_field)
 add_subdirectory(examples/05_example_layout)
 add_subdirectory(examples/06_example_windows_navigation)
 add_subdirectory(examples/07_example_checkbox)
+
+message(STATUS "PulseUI ${PROJECT_VERSION} configured.")
