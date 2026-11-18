@@ -1,139 +1,112 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PulseUI LANGUAGES CXX OBJCXX)
+project(PulseUI VERSION 0.2.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OBJCXX_STANDARD 20)
-set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
-
-set(PULSE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(PULSE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-# ------------------------------------------------------------------
-# Options
-# ------------------------------------------------------------------
-# Platform backend selection: cocoa|win32 (default: OS)
-option(PULSEUI_BACKEND "Backend to use (cocoa|win32)" "")
-
-option(PULSEUI_FETCH_PULSE "Fetch Pulse library automatically" ON)
-
-# ------------------------------------------------------------------
-# Dependency: Pulse (via FetchContent)
-# ------------------------------------------------------------------
-include(FetchContent)
-if(PULSEUI_FETCH_PULSE)
-  FetchContent_Declare(
-    pulse
-    GIT_REPOSITORY https://github.com/danrom11/Pulse.git
-    GIT_TAG        main
-  )
-  FetchContent_MakeAvailable(pulse)
+if(APPLE)
+  enable_language(OBJCXX)
 endif()
 
-# ------------------------------------------------------------------
-# PulseUI Public Headers
-# ------------------------------------------------------------------
-# Unified Interface UI Header Library
-if(NOT TARGET PulseUI_ui)
-  add_library(PulseUI_ui INTERFACE)
-  target_include_directories(PulseUI_ui INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
-  add_library(PulseUI::ui ALIAS PulseUI_ui)
-endif()
+option(PULSEUI_BUILD_EXAMPLES "Build PulseUI examples" ${PROJECT_IS_TOP_LEVEL})
+option(PULSEUI_BUILD_TESTS    "Build PulseUI tests"    ${PROJECT_IS_TOP_LEVEL})
+set(PULSEUI_PULSE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Pulse" CACHE PATH
+    "Local Pulse checkout (falls back to FetchContent when missing)")
 
 # ------------------------------------------------------------------
-# Platform backends (no duplicate goals)
+# Dependency: Pulse (local sibling checkout or FetchContent)
 # ------------------------------------------------------------------
-
-# ---- macOS Cocoa ----
-if(APPLE AND NOT TARGET PulseUI_platform_cocoa)
-  add_library(PulseUI_platform_cocoa STATIC
-    src/ui/app.mm
-    src/platform/cocoa/aliases.mm
-    src/platform/cocoa/window_cocoa.mm
-    src/platform/cocoa/canvas_cg.mm
-    src/platform/cocoa/executor_cocoa.mm
-    src/platform/cocoa/timers_cocoa.mm
-  )
-  target_link_libraries(PulseUI_platform_cocoa
-    PUBLIC PulseUI::ui
-            "-framework AppKit"
-            "-framework CoreGraphics"
-            "-framework CoreText"
-            "-framework QuartzCore"
-            "-framework Foundation"
-  )
-  # Without GNU ObjC++ extensions
-  set_target_properties(PulseUI_platform_cocoa PROPERTIES
-    OBJCXX_EXTENSIONS OFF
-  )
-  
-  target_compile_options(PulseUI_platform_cocoa PRIVATE
-    -fobjc-arc
-    -fobjc-arc-exceptions
-  )
-endif()
-
-# ---- Windows Win32 + GDI ----
-if(WIN32 AND NOT TARGET PulseUI_platform_win32)
-  add_library(PulseUI_platform_win32 STATIC
-    src/ui/app_win32.cpp
-    src/platform/win32/aliases.cpp
-    src/platform/win32/window_win32.cpp
-    src/platform/win32/executor_win32.cpp
-  )
-  target_link_libraries(PulseUI_platform_win32 PUBLIC PulseUI::ui)
-  # Системные библиотеки
-  target_link_libraries(PulseUI_platform_win32 PUBLIC user32 gdi32)
-endif()
-
-# ------------------------------------------------------------------
-# Selecting an active platform target
-# ------------------------------------------------------------------
-if(PULSEUI_BACKEND STREQUAL "cocoa")
-  if(NOT TARGET PulseUI_platform_cocoa)
-    message(FATAL_ERROR "Requested backend 'cocoa' but target PulseUI_platform_cocoa is not available.")
-  endif()
-  add_library(PulseUI_platform ALIAS PulseUI_platform_cocoa)
-elseif(PULSEUI_BACKEND STREQUAL "win32")
-  if(NOT TARGET PulseUI_platform_win32)
-    message(FATAL_ERROR "Requested backend 'win32' but target PulseUI_platform_win32 is not available.")
-  endif()
-  add_library(PulseUI_platform ALIAS PulseUI_platform_win32)
-else()
-  # Auto-select by OS
-  if(APPLE)
-    if(NOT TARGET PulseUI_platform_cocoa)
-      message(FATAL_ERROR "macOS detected but Cocoa backend is missing.")
-    endif()
-    add_library(PulseUI_platform ALIAS PulseUI_platform_cocoa)
-  elseif(WIN32)
-    if(NOT TARGET PulseUI_platform_win32)
-      message(FATAL_ERROR "Windows detected but Win32 backend is missing.")
-    endif()
-    add_library(PulseUI_platform ALIAS PulseUI_platform_win32)
+if(NOT TARGET Pulse::pulse)
+  set(PULSE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(PULSE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  if(EXISTS "${PULSEUI_PULSE_DIR}/CMakeLists.txt")
+    add_subdirectory("${PULSEUI_PULSE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_pulse")
   else()
-    message(FATAL_ERROR "No backend available for this platform (add x11/sdl/qt backend).")
+    include(FetchContent)
+    FetchContent_Declare(pulse GIT_REPOSITORY https://github.com/danrom11/Pulse.git GIT_TAG main)
+    FetchContent_MakeAvailable(pulse)
   endif()
 endif()
 
 # ------------------------------------------------------------------
-# PulseUI Summary Interface Target
+# Library
 # ------------------------------------------------------------------
-if(NOT TARGET PulseUI)
-  add_library(PulseUI INTERFACE)
+set(PULSEUI_SOURCES
+  src/core/json.cpp
+  src/gfx/gfx.cpp
+  src/ui/theme.cpp
+  src/ui/view.cpp
+  src/ui/containers.cpp
+  src/ui/widgets.cpp
+  src/ui/code_editor.cpp
+  src/ui/window.cpp
+  src/ui/meta.cpp
+  src/ui/form.cpp
+)
+
+if(WIN32)
+  list(APPEND PULSEUI_SOURCES
+    src/platform/win32/win32_platform.cpp
+    src/platform/win32/win32_window.cpp
+    src/platform/win32/d2d_painter.cpp
+  )
+elseif(APPLE)
+  list(APPEND PULSEUI_SOURCES
+    src/platform/cocoa/cocoa_platform.mm
+    src/platform/cocoa/cocoa_window.mm
+    src/platform/cocoa/cg_painter.mm
+  )
+else()
+  message(FATAL_ERROR "PulseUI: no backend for this platform yet (Windows and macOS are supported).")
 endif()
-target_link_libraries(PulseUI INTERFACE PulseUI_platform)
+
+add_library(PulseUI STATIC ${PULSEUI_SOURCES})
 add_library(PulseUI::PulseUI ALIAS PulseUI)
 
-# It is necessary that consumers via PulseUI also see Pulse
-# target_link_libraries(PulseUI INTERFACE pulse)
+target_include_directories(PulseUI PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_compile_features(PulseUI PUBLIC cxx_std_20)
+target_link_libraries(PulseUI PUBLIC Pulse::pulse)
 
-# ------------------------------------------------------------------
-# Examples
-# ------------------------------------------------------------------
-add_subdirectory(examples/00_hello_window)
-add_subdirectory(examples/01_counter_reactive)
-add_subdirectory(examples/02_example_button)
+if(WIN32)
+  target_compile_definitions(PulseUI PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+  target_link_libraries(PulseUI PRIVATE d2d1 dwrite windowscodecs ole32 shell32 user32 gdi32 uuid)
+  if(MSVC)
+    target_compile_options(PulseUI PRIVATE /W4 /permissive- /utf-8 /wd4100 /wd4244 /wd4267)
+  else()
+    target_compile_options(PulseUI PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
+  endif()
+elseif(APPLE)
+  set_target_properties(PulseUI PROPERTIES OBJCXX_EXTENSIONS OFF)
+  set_source_files_properties(
+    src/platform/cocoa/cocoa_platform.mm
+    src/platform/cocoa/cocoa_window.mm
+    src/platform/cocoa/cg_painter.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  target_link_libraries(PulseUI PRIVATE
+    "-framework AppKit" "-framework CoreGraphics" "-framework CoreText"
+    "-framework QuartzCore" "-framework Foundation" "-framework ImageIO")
+  target_compile_options(PulseUI PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# Helper for GUI executables: no console window on Windows, .app bundle on macOS.
+function(pulseui_add_app NAME)
+  add_executable(${NAME} WIN32 MACOSX_BUNDLE ${ARGN})
+  target_link_libraries(${NAME} PRIVATE PulseUI::PulseUI)
+  if(MSVC)
+    target_compile_options(${NAME} PRIVATE /utf-8 /permissive-)
+    # keep a regular main() as the entry point for WIN32 apps
+    target_link_options(${NAME} PRIVATE /ENTRY:mainCRTStartup)
+  elseif(WIN32)
+    target_link_options(${NAME} PRIVATE -mwindows)
+  endif()
+endfunction()
+
+if(PULSEUI_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()
+
+if(PULSEUI_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()

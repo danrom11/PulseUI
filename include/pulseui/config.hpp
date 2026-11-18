@@ -1,4 +1,0 @@
-#pragma once
-#define PULSEUI_VERSION_MAJOR 0
-#define PULSEUI_VERSION_MINOR 1
-#define PULSEUI_VERSION_PATCH 0
