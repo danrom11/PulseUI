@@ -2,6 +2,11 @@
 #include <pulseui/ui/window.hpp>
 
 #include <algorithm>
+#include <cstdlib>
+#include <stdexcept>
+#if defined(__GNUG__)
+#include <cxxabi.h>
+#endif
 
 #include "../platform/platform.hpp"
 
@@ -10,6 +15,26 @@ namespace pulseui {
 namespace detail {
 void post_to_ui(std::function<void()> fn) { platform::post(std::move(fn)); }
 bool on_ui_thread() { return platform::is_main_thread(); }
+} // namespace detail
+
+namespace detail {
+void throw_view_lookup(std::string_view id, const char* wanted, View* found) {
+  std::string w = wanted;
+#if defined(__GNUG__)
+  int status = 0;
+  if (char* d = abi::__cxa_demangle(wanted, nullptr, nullptr, &status)) {
+    w = d;
+    std::free(d);
+  }
+#endif
+  for (const char* prefix : {"class ", "struct "})
+    if (w.rfind(prefix, 0) == 0) w.erase(0, std::char_traits<char>::length(prefix));
+  if (const auto p = w.rfind("::"); p != std::string::npos) w.erase(0, p + 2);
+  std::string msg = "pulseui: no view with id '" + std::string(id) + "'";
+  if (found) msg = "pulseui: view '" + std::string(id) + "' is a " + found->type_name() + ", not a " + w;
+  else if (!w.empty() && w != "View") msg += " (expected a " + w + ")";
+  throw std::runtime_error(msg);
+}
 } // namespace detail
 
 View::View(View&& o) noexcept
@@ -30,7 +55,8 @@ View::View(View&& o) noexcept
       visible_(o.visible_),
       enabled_(o.enabled_),
       focusable_(o.focusable_),
-      hover_repaint_(o.hover_repaint_) {
+      hover_repaint_(o.hover_repaint_),
+      annotations_(std::move(o.annotations_)) {
   for (auto& c : children_) c->parent_ = this;
 }
 
@@ -99,6 +125,33 @@ View* View::find(std::string_view id) {
   for (auto& c : children_)
     if (View* v = c->find(id)) return v;
   return nullptr;
+}
+
+const std::string* View::annotation(std::string_view key) const {
+  if (!annotations_) return nullptr;
+  for (auto& [k, v] : *annotations_)
+    if (k == key) return &v;
+  return nullptr;
+}
+
+void View::set_annotation(std::string_view key, std::string value) {
+  if (!annotations_) {
+    if (value.empty()) return;
+    annotations_ = std::make_unique<std::vector<std::pair<std::string, std::string>>>();
+  }
+  auto& a = *annotations_;
+  for (auto it = a.begin(); it != a.end(); ++it)
+    if (it->first == key) {
+      if (value.empty()) a.erase(it);
+      else it->second = std::move(value);
+      return;
+    }
+  if (!value.empty()) a.emplace_back(std::string(key), std::move(value));
+}
+
+const std::vector<std::pair<std::string, std::string>>& View::annotations() const {
+  static const std::vector<std::pair<std::string, std::string>> none;
+  return annotations_ ? *annotations_ : none;
 }
 
 // ── geometry / state ─────────────────────────────────────────────────────────

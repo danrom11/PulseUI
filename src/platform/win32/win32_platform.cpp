@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -72,7 +73,8 @@ struct TimerEntry {
   std::function<void()> fn;
   bool repeat;
 };
-std::unordered_map<UINT_PTR, TimerEntry> g_timers;
+// Never destroyed: timers may be cancelled by static objects during shutdown.
+std::unordered_map<UINT_PTR, TimerEntry>& g_timers = *new std::unordered_map<UINT_PTR, TimerEntry>();
 UINT_PTR g_next_timer = 1;
 
 void drain_posts() {
@@ -156,6 +158,24 @@ int run() {
   }
   drain_posts();
   return static_cast<int>(msg.wParam);
+}
+
+void process_events(int timeout_ms) {
+  const ULONGLONG end = GetTickCount64() + static_cast<ULONGLONG>(std::max(0, timeout_ms));
+  for (;;) {
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+      if (msg.message == WM_QUIT) {
+        PostQuitMessage(static_cast<int>(msg.wParam)); // leave it for the real loop
+        return;
+      }
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (now >= end) return;
+    MsgWaitForMultipleObjects(0, nullptr, FALSE, static_cast<DWORD>(end - now), QS_ALLINPUT);
+  }
 }
 
 void quit(int code) {

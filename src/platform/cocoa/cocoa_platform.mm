@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <ImageIO/ImageIO.h>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <unordered_map>
@@ -24,7 +25,8 @@ namespace {
 PulseAppDelegate* g_delegate = nil;
 int g_exit_code = 0;
 bool g_inited = false;
-std::unordered_map<std::uint64_t, NSTimer*> g_timers;
+// Never destroyed: timers may be cancelled by static objects during shutdown.
+std::unordered_map<std::uint64_t, NSTimer*>& g_timers = *new std::unordered_map<std::uint64_t, NSTimer*>();
 std::uint64_t g_next_timer = 1;
 
 NSString* ns(const std::string& s) { return [NSString stringWithUTF8String:s.c_str()]; }
@@ -74,6 +76,17 @@ int run() {
   [NSApp activateIgnoringOtherApps:YES];
   [NSApp run];
   return g_exit_code;
+}
+
+void process_events(int timeout_ms) {
+  @autoreleasepool {
+    NSDate* until = [NSDate dateWithTimeIntervalSinceNow:std::max(0, timeout_ms) / 1000.0];
+    for (;;) {
+      NSEvent* e = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:until inMode:NSDefaultRunLoopMode dequeue:YES];
+      if (!e) break; // the deadline passed (timers and dispatched work ran meanwhile)
+      [NSApp sendEvent:e];
+    }
+  }
 }
 
 void quit(int code) {

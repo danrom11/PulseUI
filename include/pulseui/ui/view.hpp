@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -119,6 +120,17 @@ public:
   View* find(std::string_view id);
   template <class V>
   V* find(std::string_view id) { return dynamic_cast<V*>(find(id)); }
+  // Like find, but the view must exist and have type V; otherwise throws
+  // std::runtime_error naming the id and the type that was found.
+  template <class V = View>
+  V& get(std::string_view id);
+
+  // ── annotations ──────────────────────────────────────────────────────────
+  // Free-form key/value data attached to a view. Forms use it to carry
+  // designer bindings ("bind.text" -> "email", "on.click" -> "submit").
+  const std::string* annotation(std::string_view key) const;
+  void set_annotation(std::string_view key, std::string value); // empty value removes
+  const std::vector<std::pair<std::string, std::string>>& annotations() const;
 
   // ── style / geometry ─────────────────────────────────────────────────────
   Style& style() { return style_; }
@@ -215,6 +227,7 @@ protected:
   bool pressed_ = false;
   bool focusable_ = false;
   bool hover_repaint_ = false; // repaint on hover / press changes
+  std::unique_ptr<std::vector<std::pair<std::string, std::string>>> annotations_;
 
   template <class D>
   friend class ViewT;
@@ -224,7 +237,15 @@ protected:
 namespace detail {
 void post_to_ui(std::function<void()> fn);
 bool on_ui_thread();
+[[noreturn]] void throw_view_lookup(std::string_view id, const char* wanted, View* found);
 } // namespace detail
+
+template <class V>
+V& View::get(std::string_view id) {
+  View* v = find(id);
+  if (auto* typed = dynamic_cast<V*>(v)) return *typed;
+  detail::throw_view_lookup(id, typeid(V).name(), v);
+}
 
 template <class T, class F>
 void View::bind(const Bind<T>& b, F apply) {
@@ -256,6 +277,12 @@ template <class D>
 class ViewT : public View {
 public:
   D& self() { return static_cast<D&>(*this); }
+
+  // The modifiers below would hide these getters of View: keep both usable
+  // (text_field->id() reads, text_field->id("x") sets).
+  using View::cursor;
+  using View::id;
+  using View::tooltip;
 
   PULSEUI_MOD(D, id, (std::string v), set_id(std::move(v));)
   PULSEUI_MOD(D, padding, (Insets p), style_.padding = p;)

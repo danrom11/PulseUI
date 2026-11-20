@@ -1,4 +1,7 @@
 #include <pulseui/ui/form.hpp>
+
+#include <algorithm>
+#include <cctype>
 #include <pulseui/ui/meta.hpp>
 
 #include <fstream>
@@ -41,6 +44,13 @@ json::Value view_to_json(View& v) {
     props[p->name] = value_to_json(cur);
   }
   if (!props.fields().empty()) j["props"] = std::move(props);
+  json::Value bind = json::Value::object(), on = json::Value::object();
+  for (auto& [key, value] : v.annotations()) {
+    if (key.rfind("bind.", 0) == 0) bind[key.substr(5)] = value;
+    else if (key.rfind("on.", 0) == 0) on[key.substr(3)] = value;
+  }
+  if (!bind.fields().empty()) j["bind"] = std::move(bind);
+  if (!on.fields().empty()) j["on"] = std::move(on);
   if (!v.children().empty()) {
     json::Value kids = json::Value::array();
     for (auto& c : v.children()) kids.push_back(view_to_json(*c));
@@ -65,6 +75,10 @@ Node view_from_json(const json::Value& j, std::string* error) {
   for (auto& [key, val] : j["props"].fields()) {
     if (const meta::Property* p = meta::property(*v, key); p && p->set) p->set(*v, value_from_json(val, p->type));
   }
+  for (auto& [key, val] : j["bind"].fields())
+    if (val.is_string()) v->set_annotation("bind." + key, val.as_string());
+  for (auto& [key, val] : j["on"].fields())
+    if (val.is_string()) v->set_annotation("on." + key, val.as_string());
   return Node(std::move(v));
 }
 
@@ -115,46 +129,140 @@ bool save_form(const std::string& path, const std::string& title, float width, f
 
 namespace {
 
-void gen(View& v, std::string& out, int depth) {
-  const std::string pad(static_cast<std::size_t>(depth * 2), ' ');
-  const meta::TypeInfo* t = meta::find(v.type_name());
-  if (!t) {
-    out += pad + "/* unsupported: " + std::string(v.type_name()) + " */ Spacer()";
-    return;
-  }
-  out += pad + t->ctor_code(v);
-  if (t->container) {
-    out += "{\n";
-    for (std::size_t i = 0; i < v.children().size(); ++i) {
-      gen(*v.children()[i], out, depth + 1);
-      out += ",\n";
+const std::vector<std::string>& cpp_keywords() {
+  static const std::vector<std::string> k{
+      "alignas", "alignof", "and", "asm", "auto", "bool", "break", "case", "catch", "char", "class", "const",
+      "constexpr", "const_cast", "continue", "decltype", "default", "delete", "do", "double", "dynamic_cast", "else",
+      "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto", "if", "inline", "int", "long",
+      "mutable", "namespace", "new", "noexcept", "not", "nullptr", "operator", "or", "private", "protected", "public",
+      "register", "reinterpret_cast", "requires", "return", "short", "signed", "sizeof", "static", "static_assert",
+      "static_cast", "struct", "switch", "template", "this", "throw", "true", "try", "typedef", "typeid", "typename",
+      "union", "unsigned", "using", "virtual", "void", "volatile", "while", "xor", "co_await", "co_return", "co_yield",
+      "concept", "consteval", "constinit", "char8_t", "char16_t", "char32_t", "wchar_t"};
+  return k;
+}
+
+void collect_refs(View& v, const std::vector<std::string>& reserved, std::vector<FormRef>& out) {
+  const std::string& id = v.id();
+  if (is_cpp_identifier(id) && std::find(reserved.begin(), reserved.end(), id) == reserved.end() &&
+      std::none_of(out.begin(), out.end(), [&](const FormRef& r) { return r.id == id; }))
+    out.push_back({id, meta::cpp_class(v.type_name()), &v});
+  for (auto& c : v.children()) collect_refs(*c, reserved, out);
+}
+
+struct Gen {
+  const CodegenOptions& opt;
+  std::vector<FormRef> refs;
+
+  void view(View& v, std::string& out, int depth) {
+    const std::string pad(static_cast<std::size_t>(depth * 2), ' ');
+    const meta::TypeInfo* t = meta::find(v.type_name());
+    if (!t) {
+      out += pad + "/* unsupported: " + std::string(v.type_name()) + " */ Spacer()";
+      return;
     }
-    out += pad + "}";
+    out += pad + t->ctor_code(v);
+    if (t->container) {
+      out += "{\n";
+      for (std::size_t i = 0; i < v.children().size(); ++i) {
+        view(*v.children()[i], out, depth + 1);
+        out += ",\n";
+      }
+      out += pad + "}";
+    }
+    auto def = meta::create(v.type_name());
+    for (const meta::Property* p : meta::properties(v)) {
+      if (!p->code || !p->get) continue;
+      if (p->bind && v.annotation("bind." + p->name)) continue; // bound: the binding sets it
+      const meta::Value cur = p->get(v);
+      if (def && meta::equal(cur, p->get(*def))) continue;
+      out += p->code(v, cur);
+    }
+    if (opt.refs && std::any_of(refs.begin(), refs.end(), [&](const FormRef& r) { return r.view == &v; }))
+      out += ".ref(" + v.id() + ")";
+    // bindings: properties first, then events
+    for (const meta::Property* p : meta::properties(v)) {
+      const std::string* target = p->bind ? v.annotation("bind." + p->name) : nullptr;
+      if (!target) continue;
+      if (is_binding_path(*target)) out += p->bind(opt.model + "." + *target);
+      else out += " /* invalid binding '" + *target + "' */";
+    }
+    for (const meta::Event& e : meta::events(v)) {
+      const std::string* method = v.annotation("on." + e.name);
+      if (!method) continue;
+      if (!is_binding_path(*method)) {
+        out += " /* invalid handler '" + *method + "' */";
+        continue;
+      }
+      const std::string call = opt.model + "." + *method;
+      if (e.arg.empty()) {
+        out += "." + e.modifier + "([&" + opt.model + "] { " + call + "(); })";
+      } else {
+        // the handler may take the value or nothing
+        out += "." + e.modifier + "([&" + opt.model + "](" + e.arg + " value) { if constexpr (requires { " + call +
+               "(value); }) " + call + "(value); else " + call + "(); })";
+      }
+    }
   }
-  auto def = meta::create(v.type_name());
-  for (const meta::Property* p : meta::properties(v)) {
-    if (!p->code || !p->get) continue;
-    const meta::Value cur = p->get(v);
-    if (def && meta::equal(cur, p->get(*def))) continue;
-    out += p->code(v, cur);
-  }
+};
+
+bool any_binding(View& v) {
+  for (auto& [key, value] : v.annotations())
+    if (key.rfind("bind.", 0) == 0 || key.rfind("on.", 0) == 0) return true;
+  for (auto& c : v.children())
+    if (any_binding(*c)) return true;
+  return false;
 }
 
 } // namespace
 
-std::string generate_cpp_expression(View& root, int indent) {
+bool is_cpp_identifier(std::string_view s) {
+  if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
+  for (char c : s)
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+  const auto& k = cpp_keywords();
+  return std::find(k.begin(), k.end(), s) == k.end();
+}
+
+bool is_binding_path(std::string_view s) {
+  if (s.empty()) return false;
+  std::size_t start = 0;
+  for (;;) {
+    const std::size_t dot = s.find('.', start);
+    if (!is_cpp_identifier(s.substr(start, dot == std::string_view::npos ? std::string_view::npos : dot - start))) return false;
+    if (dot == std::string_view::npos) return true;
+    start = dot + 1;
+  }
+}
+
+bool form_has_bindings(View& root) { return any_binding(root); }
+
+std::vector<FormRef> form_refs(View& root, const std::vector<std::string>& reserved) {
+  std::vector<FormRef> out;
+  collect_refs(root, reserved, out);
+  return out;
+}
+
+std::string generate_cpp_expression(View& root, int indent, const CodegenOptions& options) {
+  Gen g{options, options.refs ? form_refs(root, options.reserved) : std::vector<FormRef>{}};
   std::string body;
-  gen(root, body, indent);
+  g.view(root, body, indent);
   return body;
 }
 
+std::string generate_cpp_expression(View& root, int indent) { return generate_cpp_expression(root, indent, CodegenOptions{}); }
+
 std::string generate_cpp(View& root, const std::string& function_name, int indent) {
-  std::string body;
-  gen(root, body, indent + 2);
+  const std::string body = generate_cpp_expression(root, indent + 2);
   std::string out;
-  out += "// Generated by Pulse Layer. Bind state by id: win.find<Text>(\"title\")->bind_text(...)\n";
+  out += "// Generated by Pulse Layer.\n";
   out += "#pragma once\n#include <pulseui/pulseui.hpp>\n\n";
-  out += "inline pulseui::Node " + function_name + "() {\n";
+  if (form_has_bindings(root)) {
+    out += "// Bindings refer to members of `m`: call " + function_name + "(*this) from the class that owns the state.\n";
+    out += "template <class Model>\ninline pulseui::Node " + function_name + "(Model& m) {\n";
+  } else {
+    out += "inline pulseui::Node " + function_name + "() {\n";
+  }
   out += "  using namespace pulseui;\n";
   out += "  return\n" + body + ";\n}\n";
   return out;

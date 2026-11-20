@@ -47,6 +47,8 @@ void init();
 int run();
 void quit(int code);
 void post(std::function<void()> fn);
+// Dispatch events for up to `timeout_ms` (returns early only on quit). Does not show windows.
+void process_events(int timeout_ms);
 bool is_main_thread();
 
 std::uint64_t start_timer(int ms, bool repeat, std::function<void()> fn);

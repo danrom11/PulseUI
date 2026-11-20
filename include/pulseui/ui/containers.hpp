@@ -190,10 +190,16 @@ private:
   ItemFn fn_;
 };
 
+// property / computed of a vector
 template <class Src, class F>
+  requires detail::has_as_observable<Src>
 ForEach(Src&, F) -> ForEach<typename Src::value_type::value_type>;
+// a stream of vectors
 template <class U, class F>
 ForEach(pulse::observable<std::vector<U>>, F) -> ForEach<U>;
+// a plain vector
+template <class U, class F>
+ForEach(std::vector<U>, F) -> ForEach<U>;
 
 namespace detail {
 Size stack_measure(View& v, Orientation o, float spacing, Size avail);

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PulseUI VERSION 0.2.0 LANGUAGES CXX)
+project(PulseUI VERSION 0.3.0 LANGUAGES CXX)
 
 if(APPLE)
   enable_language(OBJCXX)
@@ -40,6 +40,7 @@ set(PULSEUI_SOURCES
   src/ui/window.cpp
   src/ui/meta.cpp
   src/ui/form.cpp
+  src/ui/testing.cpp
 )
 
 if(WIN32)

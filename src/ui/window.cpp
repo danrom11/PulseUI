@@ -77,6 +77,7 @@ int App::run() {
 }
 
 void App::quit(int code) { platform::quit(code); }
+void App::process_events(std::chrono::milliseconds d) { platform::process_events(static_cast<int>(d.count())); }
 App* App::instance() { return g_app; }
 void App::post(std::function<void()> fn) { platform::post(std::move(fn)); }
 bool App::is_ui_thread() { return platform::is_main_thread(); }
@@ -201,6 +202,8 @@ Window& Window::shortcut(std::string_view keys, std::function<void()> fn) {
 }
 
 // ── layout & paint ───────────────────────────────────────────────────────────
+
+void Window::update_layout() { ensure_layout(); }
 
 void Window::ensure_layout() {
   if (!layout_dirty_) return;

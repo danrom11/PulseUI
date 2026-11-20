@@ -45,6 +45,10 @@ public:
   static pulse::subscription after(std::chrono::milliseconds d, std::function<void()> fn);
   static pulse::subscription every(std::chrono::milliseconds d, std::function<void()> fn);
 
+  // Process pending events (timers, posted work) for up to `d` without running
+  // the full loop or showing windows. For tests and tools.
+  static void process_events(std::chrono::milliseconds d);
+
   static void set_clipboard(const std::string& text);
   static std::string clipboard();
 
@@ -69,6 +73,12 @@ public:
   template <class V = View>
   V* find(std::string_view id) const {
     return root_ ? root_->template find<V>(id) : nullptr;
+  }
+  // The view must exist and have type V, otherwise std::runtime_error.
+  template <class V = View>
+  V& get(std::string_view id) const {
+    if (!root_) detail::throw_view_lookup(id, typeid(V).name(), nullptr);
+    return root_->template get<V>(id);
   }
 
   void show();
@@ -106,6 +116,7 @@ public:
   void send(InputEvent e); // inject an event (automation / tests)
   void request_paint();
   void request_layout();
+  void update_layout(); // lay out now if needed (normally done before painting and input)
   void* native_handle() const;
   platform::NativeWindow* native_window() const { return native_.get(); }
 

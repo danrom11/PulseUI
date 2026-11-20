@@ -56,6 +56,19 @@ std::string join_csv(const std::vector<std::string>& v) {
   return out;
 }
 
+// ".model(" + expr + ")"
+std::function<std::string(const std::string&)> binder(std::string modifier) {
+  return [modifier](const std::string& expr) { return "." + modifier + "(" + expr + ")"; };
+}
+
+void make_bindable(std::vector<Property>& props, const std::string& name, const std::string& modifier, std::string hint) {
+  for (auto& p : props)
+    if (p.name == name) {
+      p.bind = binder(modifier);
+      p.bind_hint = std::move(hint);
+    }
+}
+
 // ── property builders ──
 template <class V>
 Property number(std::string name, std::string group, double (*get)(V&), void (*set)(V&, double),
@@ -170,6 +183,10 @@ std::vector<Property>& common_props() {
                               [](View& v, bool b) { v.set_enabled(b); }, "enabled"));
     c.push_back(string<View>("tooltip", "Behavior", [](View& v) { return v.tooltip(); },
                              [](View& v, const std::string& s) { v.set_tooltip(s); }, "tooltip"));
+    make_bindable(c, "background", "background", "Color");
+    make_bindable(c, "visible", "visible", "bool");
+    make_bindable(c, "enabled", "enabled", "bool");
+    make_bindable(c, "tooltip", "tooltip", "std::string");
     return c;
   }();
   return props;
@@ -203,29 +220,29 @@ std::vector<TypeInfo>& registry() {
 
     // ── layout ──
     {
-      TypeInfo t{"VStack", "Layout", "⇕", true, [] { return std::make_unique<VStack>(); }, [](View&) { return std::string("VStack"); }, {}};
+      TypeInfo t{"VStack", "Layout", "⇕", true, [] { return std::make_unique<VStack>(); }, [](View&) { return std::string("VStack"); }, {}, {}, {}};
       add_stack_props<VStack>(t);
       r.push_back(std::move(t));
     }
     {
-      TypeInfo t{"HStack", "Layout", "⇔", true, [] { return std::make_unique<HStack>(); }, [](View&) { return std::string("HStack"); }, {}};
+      TypeInfo t{"HStack", "Layout", "⇔", true, [] { return std::make_unique<HStack>(); }, [](View&) { return std::string("HStack"); }, {}, {}, {}};
       add_stack_props<HStack>(t);
       r.push_back(std::move(t));
     }
     {
-      TypeInfo t{"Panel", "Layout", "▢", true, [] { return std::make_unique<Panel>(); }, [](View&) { return std::string("Panel"); }, {}};
+      TypeInfo t{"Panel", "Layout", "▢", true, [] { return std::make_unique<Panel>(); }, [](View&) { return std::string("Panel"); }, {}, {}, {}};
       add_stack_props<Panel>(t);
       r.push_back(std::move(t));
     }
-    r.push_back({"Layer", "Layout", "◫", true, [] { return std::make_unique<Layer>(); }, [](View&) { return std::string("Layer"); }, {}});
-    r.push_back({"Scroll", "Layout", "↕", true, [] { return std::make_unique<Scroll>(); }, [](View&) { return std::string("Scroll"); }, {}});
-    r.push_back({"Spacer", "Layout", "↔", false, [] { return std::make_unique<Spacer>(); }, [](View&) { return std::string("Spacer()"); }, {}});
+    r.push_back({"Layer", "Layout", "◫", true, [] { return std::make_unique<Layer>(); }, [](View&) { return std::string("Layer"); }, {}, {}, {}});
+    r.push_back({"Scroll", "Layout", "↕", true, [] { return std::make_unique<Scroll>(); }, [](View&) { return std::string("Scroll"); }, {}, {}, {}});
+    r.push_back({"Spacer", "Layout", "↔", false, [] { return std::make_unique<Spacer>(); }, [](View&) { return std::string("Spacer()"); }, {}, {}, {}});
     {
       TypeInfo t{"Divider", "Layout", "—", false, [] { return std::make_unique<Divider>(); },
                  [](View& v) {
                    return static_cast<Divider&>(v).orientation() == Orientation::Vertical ? std::string("Divider(Orientation::Vertical)")
                                                                                           : std::string("Divider()");
-                 }, {}};
+                 }, {}, {}, {}};
       t.props.push_back(enumeration<Divider>("orientation", "Divider", {"Horizontal", "Vertical"},
                                              [](Divider& d) { return static_cast<int>(d.orientation()); },
                                              [](Divider& d, int i) { d.set_orientation(static_cast<Orientation>(i)); }));
@@ -235,7 +252,7 @@ std::vector<TypeInfo>& registry() {
     // ── display ──
     {
       TypeInfo t{"Text", "Display", "T", false, [] { return std::make_unique<Text>("Text"); },
-                 [](View& v) { return "Text(" + quote(static_cast<Text&>(v).text()) + ")"; }, {}};
+                 [](View& v) { return "Text(" + quote(static_cast<Text&>(v).text()) + ")"; }, {}, {}, {}};
       t.props.push_back(string<Text>("text", "Text", [](Text& x) { return x.text(); }, [](Text& x, const std::string& s) { x.set_text(s); }));
       t.props.push_back(number<Text>("font_size", "Text", [](Text& x) { return static_cast<double>(x.font_size_value()); },
                                      [](Text& x, double d) { x.set_font_size(static_cast<float>(d)); }, "font_size", 0, 200));
@@ -260,14 +277,14 @@ std::vector<TypeInfo>& registry() {
     }
     {
       TypeInfo t{"Image", "Display", "▣", false, [] { return std::make_unique<ImageView>(); },
-                 [](View& v) { return "ImageView(std::string(" + quote(static_cast<ImageView&>(v).source()) + "))"; }, {}};
+                 [](View& v) { return "ImageView(std::string(" + quote(static_cast<ImageView&>(v).source()) + "))"; }, {}, {}, {}};
       t.props.push_back(string<ImageView>("source", "Image", [](ImageView& x) { return x.source(); },
                                           [](ImageView& x, const std::string& s) { x.set_source(s); }));
       r.push_back(std::move(t));
     }
     {
       TypeInfo t{"ProgressBar", "Display", "▬", false, [] { return std::make_unique<ProgressBar>(Bind<double>(0.4)); },
-                 [](View& v) { return "ProgressBar(" + num(static_cast<ProgressBar&>(v).value()) + ")"; }, {}};
+                 [](View& v) { return "ProgressBar(" + num(static_cast<ProgressBar&>(v).value()) + ")"; }, {}, {}, {}};
       t.props.push_back(number<ProgressBar>("value", "Value", [](ProgressBar& x) { return x.value(); },
                                             [](ProgressBar& x, double d) { x.set_value(d); }, {}, 0, 1));
       r.push_back(std::move(t));
@@ -276,7 +293,7 @@ std::vector<TypeInfo>& registry() {
     // ── controls ──
     {
       TypeInfo t{"Button", "Controls", "▭", false, [] { return std::make_unique<Button>("Button"); },
-                 [](View& v) { return "Button(" + quote(static_cast<Button&>(v).label()) + ")"; }, {}};
+                 [](View& v) { return "Button(" + quote(static_cast<Button&>(v).label()) + ")"; }, {}, {}, {}};
       t.props.push_back(string<Button>("label", "Button", [](Button& x) { return x.label(); }, [](Button& x, const std::string& s) { x.set_label(s); }));
       t.props.push_back(enumeration<Button>("kind", "Button", {"Normal", "Primary", "Flat", "Danger"},
                                             [](Button& x) { return static_cast<int>(x.kind_value()); },
@@ -289,7 +306,7 @@ std::vector<TypeInfo>& registry() {
     }
     {
       TypeInfo t{"TextField", "Controls", "⌨", false, [] { return std::make_unique<TextField>(); },
-                 [](View&) { return std::string("TextField()"); }, {}};
+                 [](View&) { return std::string("TextField()"); }, {}, {}, {}};
       t.props.push_back(string<TextField>("placeholder", "TextField", [](TextField& x) { return x.placeholder_value(); },
                                           [](TextField& x, const std::string& s) { x.set_placeholder(s); }, "placeholder"));
       t.props.push_back(string<TextField>("text", "TextField", [](TextField& x) { return x.text(); },
@@ -301,7 +318,7 @@ std::vector<TypeInfo>& registry() {
                  [](View& v) {
                    auto& c = static_cast<Checkbox&>(v);
                    return "Checkbox(" + quote(c.label()) + (c.checked() ? ", true)" : ")");
-                 }, {}};
+                 }, {}, {}, {}};
       t.props.push_back(string<Checkbox>("label", "Checkbox", [](Checkbox& x) { return x.label(); }, [](Checkbox& x, const std::string& s) { x.set_label(s); }));
       t.props.push_back(boolean<Checkbox>("checked", "Checkbox", [](Checkbox& x) { return x.checked(); }, [](Checkbox& x, bool b) { x.set_checked(b, false); }));
       r.push_back(std::move(t));
@@ -311,7 +328,7 @@ std::vector<TypeInfo>& registry() {
                  [](View& v) {
                    auto& c = static_cast<Toggle&>(v);
                    return "Toggle(" + quote(c.label()) + (c.checked() ? ", true)" : ")");
-                 }, {}};
+                 }, {}, {}, {}};
       t.props.push_back(string<Toggle>("label", "Toggle", [](Toggle& x) { return x.label(); }, [](Toggle& x, const std::string& s) { x.set_label(s); }));
       t.props.push_back(boolean<Toggle>("checked", "Toggle", [](Toggle& x) { return x.checked(); }, [](Toggle& x, bool b) { x.set_checked(b, false); }));
       r.push_back(std::move(t));
@@ -321,7 +338,7 @@ std::vector<TypeInfo>& registry() {
                  [](View& v) {
                    auto& s = static_cast<Slider&>(v);
                    return "Slider(" + num(s.value()) + ", " + num(s.min()) + ", " + num(s.max()) + ")";
-                 }, {}};
+                 }, {}, {}, {}};
       t.props.push_back(number<Slider>("value", "Slider", [](Slider& x) { return x.value(); }, [](Slider& x, double d) { x.set_value(d, false); }));
       t.props.push_back(number<Slider>("min", "Slider", [](Slider& x) { return x.min(); }, [](Slider& x, double d) { x.set_range(d, x.max()); }));
       t.props.push_back(number<Slider>("max", "Slider", [](Slider& x) { return x.max(); }, [](Slider& x, double d) { x.set_range(x.min(), d); }));
@@ -335,13 +352,39 @@ std::vector<TypeInfo>& registry() {
                    std::string o = "Select({";
                    for (std::size_t i = 0; i < s.options().size(); ++i) o += (i ? ", " : "") + quote(s.options()[i]);
                    return o + "}, " + std::to_string(s.index()) + ")";
-                 }, {}};
+                 }, {}, {}, {}};
       t.props.push_back(string<Select>("options", "Select", [](Select& x) { return join_csv(x.options()); },
                                        [](Select& x, const std::string& s) { x.set_options(split_csv(s)); }));
       t.props.push_back(number<Select>("index", "Select", [](Select& x) { return static_cast<double>(x.index()); },
                                        [](Select& x, double d) { x.set_index(static_cast<int>(d), false); }, {}, 0, 1000));
       r.push_back(std::move(t));
     }
+    // ── bindings and events available in forms ──
+    auto type = [&r](const char* name) -> TypeInfo& {
+      for (auto& t : r)
+        if (t.name == name) return t;
+      return r.front();
+    };
+    make_bindable(type("Text").props, "text", "bind_text", "std::string (property, computed or stream)");
+    make_bindable(type("Text").props, "color", "color", "Color");
+    make_bindable(type("Button").props, "label", "bind_label", "std::string");
+    type("Button").events = {{"click", "on_click", ""}};
+    make_bindable(type("TextField").props, "text", "model", "pulse::property<std::string> (two-way)");
+    make_bindable(type("TextField").props, "placeholder", "placeholder", "std::string");
+    type("TextField").events = {{"change", "on_change", "const std::string&"},
+                                {"submit", "on_submit", "const std::string&"},
+                                {"commit", "on_commit", "const std::string&"}};
+    for (const char* n : {"Checkbox", "Toggle"}) {
+      make_bindable(type(n).props, "checked", "model", "pulse::property<bool> (two-way)");
+      type(n).events = {{"change", "on_change", "bool"}};
+    }
+    make_bindable(type("Slider").props, "value", "model", "pulse::property<double> (two-way)");
+    type("Slider").events = {{"change", "on_change", "double"}};
+    make_bindable(type("Select").props, "index", "model", "pulse::property<int> (two-way)");
+    make_bindable(type("Select").props, "options", "bind_options", "std::vector<std::string>");
+    type("Select").events = {{"change", "on_change", "int"}};
+    make_bindable(type("ProgressBar").props, "value", "bind_value", "double 0..1");
+    type("Image").cpp_class = "ImageView";
     return r;
   }();
   return reg;
@@ -384,6 +427,18 @@ const Property* property(const View& v, std::string_view name) {
   for (auto* p : properties(v))
     if (p->name == name) return p;
   return nullptr;
+}
+
+const std::vector<Event>& events(const View& v) {
+  static const std::vector<Event> none;
+  const TypeInfo* t = find(v.type_name());
+  return t ? t->events : none;
+}
+
+std::string cpp_class(std::string_view type_name) {
+  const TypeInfo* t = find(type_name);
+  if (t && !t->cpp_class.empty()) return t->cpp_class;
+  return std::string(type_name);
 }
 
 Value get(View& v, std::string_view prop) {

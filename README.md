@@ -22,6 +22,19 @@ int main() {
 }
 ```
 
+## 📚 Documentation
+
+Everything is documented in [`docs/`](docs/README.md), from a step-by-step course to a complete reference:
+
+- **Course:** [your first apps](docs/03-tutorial.md) (counter → converter → todo list → app structure → several
+  windows → background work → custom drawing) and [forms with the Pulse Layer designer](docs/04-forms-tutorial.md)
+- **Reference:** [views and modifiers](docs/05-views-and-modifiers.md) · [reactive bindings](docs/06-reactive-bindings.md) ·
+  [layout](docs/07-layout.md) · [widgets](docs/08-widgets.md) · [styling and themes](docs/09-styling-and-themes.md) ·
+  [app and windows](docs/10-app-and-windows.md) · [input](docs/11-input-and-events.md) ·
+  [custom drawing](docs/12-custom-drawing.md) · [CodeEditor](docs/13-code-editor.md) · [forms](docs/14-forms-and-meta.md) ·
+  [testing](docs/15-testing.md) · [platforms](docs/16-platforms.md)
+- **Practice:** [patterns, pitfalls and FAQ](docs/17-patterns-and-faq.md) · [cheat sheet](docs/18-cheatsheet.md)
+
 ---
 
 ## ✨ Ideas
@@ -34,7 +47,10 @@ int main() {
 - **Automatic threading:** a stream may emit on any thread — updates are delivered on the UI thread.
 - **Lifetime-safe:** bindings subscribe on mount and are cancelled on unmount/destroy.
 - **Native and fast:** Direct2D + DirectWrite on Windows (per-monitor HiDPI, antialiasing), CoreGraphics + AppKit on macOS (Retina).
-- **Designer:** forms created in [Pulse Layer](../PulseLayer) load at runtime (`.pform`) or export to declarative C++.
+- **Designer:** forms created in the **Pulse Layer** designer load at runtime (`.pform`) or export to declarative C++.
+
+- **Testable.** `pulseui::testing::Harness` drives real windows offscreen: `t.fill("email", "a@b.c").click("submit")`,
+  then check properties, view texts or a reference screenshot. See [testing](docs/15-testing.md).
 
 ---
 
@@ -93,15 +109,26 @@ auto clicks = win.input() | pulse::filter([](const InputEvent& e) { return e.typ
 
 ### Forms from the designer
 
-```cpp
-auto form = load_form("login.pform");
-Window win(form->title, form->width, form->height);
-win.content(std::move(form->root));
+Draw a form in Pulse Layer and bind its views to members of your class right in the Properties panel
+(`email` field ← `email`, *Sign in* enabled ← `can_sign_in`, click → `sign_in()`). The build turns the
+form into ordinary declarative code, so the compiler checks every binding:
 
-win.find<TextField>("email")->model(email);           // two-way bind by id
-win.find<Button>("ok")->enabled(valid).clicked.connect([&] { sign_in(); });
-win.find<Text>("status")->bind_text(status);
+```cpp
+class LoginWindow {
+  friend struct Ui::LoginWindow;                     // the generated code binds these members
+  pulse::property<std::string> email, password;
+  pulse::computed<bool> can_sign_in;
+  void sign_in();
+
+  Ui::LoginWindow ui_;                               // typed views: ui_.email, ui_.status...
+  Window window_{Ui::LoginWindow::form_title, Ui::LoginWindow::form_width, Ui::LoginWindow::form_height};
+public:
+  LoginWindow() : can_sign_in(...) { ui_.setup(window_, *this); }
+};
 ```
+
+Forms can also be loaded at runtime with `load_form("login.pform")` and connected with
+`win.get<TextField>("email").model(email)` (a strict lookup that throws on a mismatch).
 
 ---
 
@@ -161,6 +188,20 @@ src/platform/
 - Linux backend (Wayland/X11)
 - Multi-line text editor, menus, tree view
 - Keyed diffing for `ForEach`, animations
+
+## 📝 Changelog
+
+### 0.3.0
+- **Form bindings**: a `.pform` can bind view properties to members of a model (`"bind": {"text": "email"}`) and
+  connect events to its methods (`"on": {"click": "submit"}`). Code generation turns them into ordinary modifiers,
+  so the compiler checks them. See the [forms tutorial](docs/04-forms-tutorial.md).
+- Generated form structs expose typed pointers to views with an id (`ui_.email`) and `setup(window, model)`.
+- `View::get<T>(id)` / `Window::get<T>(id)`: strict lookup that throws a descriptive error instead of returning `nullptr`.
+- **`pulseui/testing.hpp`**: drive real windows from tests without a screen (`click("submit")`, `fill("email", ...)`,
+  `press("Ctrl+S")`, `wait_until(...)`) and visual regression with `matches_snapshot(...)`. `App::process_events()`.
+- `meta::Property::bind`, `meta::Event`, `TypeInfo::cpp_class`; view annotations (`annotation`, `set_annotation`).
+- `ForEach` accepts a plain `std::vector`; `text_field->id()`, `->tooltip()`, `->cursor()` getters work on concrete widgets.
+- Complete documentation in `docs/`.
 
 ## License
 
