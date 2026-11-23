@@ -48,7 +48,8 @@ Everything is documented in [`docs/`](docs/README.md), from a step-by-step cours
 - **Declarative composition:** `VStack{...}`, `HStack{...}`, `ForEach(list, fn)`, `Show(cond, a, b)`; components are plain functions returning `Node`.
 - **Automatic threading:** a stream may emit on any thread — updates are delivered on the UI thread.
 - **Lifetime-safe:** bindings subscribe on mount and are cancelled on unmount/destroy.
-- **Native and fast:** Direct2D + DirectWrite on Windows (per-monitor HiDPI, antialiasing), CoreGraphics + AppKit on macOS (Retina).
+- **Native and fast:** Direct2D + DirectWrite on Windows (per-monitor HiDPI, antialiasing), CoreGraphics + AppKit on macOS (Retina),
+  X11 + Cairo + Pango on Linux (HiDPI from `Xft.dpi`, runs on Wayland desktops through XWayland).
 - **Designer:** forms created in the **Pulse Layer** designer load at runtime (`.pform`) or export to declarative C++.
 
 - **Testable.** `pulseui::testing::Harness` drives real windows offscreen: `t.fill("email", "a@b.c").click("submit")`,
@@ -141,6 +142,9 @@ Forms can also be loaded at runtime with `load_form("login.pform")` and connecte
 - C++20, CMake ≥ 3.21
 - Windows 10+: MSVC 2022 (or MinGW-w64 GCC ≥ 11)
 - macOS 11+: Xcode / AppleClang 14+
+- Linux (X11 or Wayland with XWayland): GCC ≥ 11 or Clang ≥ 14, and the development packages of X11, Xcursor,
+  xkbcommon, Cairo and Pango (gdk-pixbuf and GIO are optional: JPEG/GIF images and the desktop's file dialog).
+  Debian/Ubuntu: `sudo apt install pkg-config libx11-dev libxcursor-dev libxkbcommon-dev libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev`
 - [Pulse](https://github.com/danrom11/Pulse) — taken from `../Pulse` when present, otherwise fetched automatically
 
 ## 🛠️ Build
@@ -157,7 +161,7 @@ Use it from your project:
 
 ```cmake
 add_subdirectory(PulseUI)                 # or FetchContent
-pulseui_add_app(my_app main.cpp)          # GUI executable (no console on Windows, .app on macOS)
+pulseui_add_app(my_app main.cpp)          # GUI executable (no console on Windows, .app on macOS, plain on Linux)
 # or: target_link_libraries(my_target PRIVATE PulseUI::PulseUI)
 ```
 
@@ -167,6 +171,7 @@ pulseui_add_app(my_app main.cpp)          # GUI executable (no console on Window
 |----------|--------|
 | `PULSEUI_SCREENSHOT=out.png` | render the first window to PNG and exit (docs, visual checks) |
 | `PULSEUI_THEME=light\|dark` | force a theme at startup |
+| `PULSEUI_SCALE=1.5` | Linux: force the HiDPI scale (default: `Xft.dpi / 96`) |
 
 ---
 
@@ -181,6 +186,8 @@ include/pulseui/
 src/platform/
   win32/     Direct2D/DirectWrite painter, HWND window, message loop, WIC images, file dialogs
   cocoa/     CoreGraphics painter, NSView/NSWindow, NSApplication loop, ImageIO, NSOpenPanel
+  x11/       Xlib windows and input (XIM), poll() loop, CLIPBOARD selection, file dialogs (portal, zenity, kdialog)
+  cairo/     Cairo painter and Pango text, PNG/gdk-pixbuf images, offscreen rendering (shared by Linux backends)
 ```
 
 - A view is a movable *description* until it is mounted; on mount its `Bind`s subscribe, on unmount they are cancelled.
@@ -189,10 +196,32 @@ src/platform/
 
 ## 🛣 Roadmap
 
-- Linux backend (Wayland/X11, Cairo/Pango)
+- Linux: native Wayland backend (X11 works today, also through XWayland), drag and drop between applications
+  (XDND), screen readers (AT-SPI)
 - Complex text input: IME for Chinese and Japanese, right-to-left scripts
 
 ## 📝 Changelog
+
+### 0.5.0
+- **Linux backend (X11 + Cairo + Pango).** PulseUI apps build and run on Linux: on X11 desktops and on Wayland
+  desktops through XWayland. Application code does not change.
+  - Windows: title, size and minimum size, resizing, close requests, modal windows (transient dialogs that block
+    their parent), activation, themed cursors (Xcursor).
+  - Drawing with Cairo, text with Pango (fontconfig picks fonts and falls back per character for Cyrillic, CJK,
+    emoji), clipping, even-odd paths, gradients, images.
+  - Input: mouse buttons, wheel (vertical and horizontal), double and triple clicks, keyboard through XKB keysyms
+    (shortcuts keep working with non-Latin layouts), text through the X input method (XIM: dead keys, compose).
+  - HiDPI: the scale comes from `Xft.dpi` and `GDK_SCALE`; the new `PULSEUI_SCALE` variable overrides it.
+  - Clipboard: the `CLIPBOARD` selection with UTF-8 text (large transfers from other apps included).
+  - File dialogs: the desktop's own dialog through xdg-desktop-portal, else zenity or kdialog.
+  - Images: PNG through Cairo; JPEG, GIF and others with gdk-pixbuf (optional).
+  - Menu bars and message boxes are drawn by PulseUI in the current theme, as on Windows.
+  - Without an X server (CI, containers, WSL without WSLg) windows live in memory: `pulseui::testing` and
+    `PULSEUI_SCREENSHOT` work headless.
+  - Build dependencies (found with `pkg-config`): x11, xcursor, xkbcommon, cairo, pangocairo; optional
+    gdk-pixbuf-2.0 and gio-2.0. Tested with GCC 13 and 16 and Clang 18.
+  - Not yet: drag and drop between applications (XDND), screen readers (AT-SPI), a native Wayland backend.
+- The platform code is split so a future Wayland backend can reuse the Cairo/Pango painter (`src/platform/cairo/`).
 
 ### 0.4.1
 - `quit_on_last_window_closed` ignores windows hidden with `hide()`: a hidden window (for example a second form

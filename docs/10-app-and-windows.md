@@ -188,7 +188,7 @@ See [Input and events](11-input-and-events.md#the-window-input-stream).
 | `Image grab()` | render the window into an `Image` (forces a layout first) |
 | `send(InputEvent)` | inject an event, as if the user did it (tests, automation) |
 | `request_paint()`, `request_layout()` | normally called by views through `invalidate*()` |
-| `void* native_handle()` | `HWND` on Windows, `NSWindow*` on macOS |
+| `void* native_handle()` | `HWND` on Windows, `NSWindow*` on macOS, the X11 window id on Linux (null without an X server) |
 | `static const std::vector<Window*>& all()` | all open windows |
 
 ## Several windows

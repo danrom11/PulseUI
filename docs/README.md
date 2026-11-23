@@ -48,7 +48,7 @@ VStack{
 | 13 | [CodeEditor](13-code-editor.md) | The multi-line editor: models, highlighting, completion, diagnostics |
 | 14 | [Forms and reflection](14-forms-and-meta.md) | The `.pform` format, loading and saving, code generation, `meta`, custom widgets in the designer |
 | 15 | [Testing and automation](15-testing.md) | `testing::Harness`: click, type and wait in hidden windows; snapshot tests |
-| 16 | [Platforms](16-platforms.md) | Windows and macOS backends, HiDPI, threading rules, packaging |
+| 16 | [Platforms](16-platforms.md) | Windows, macOS and Linux (X11) backends, HiDPI, threading rules, packaging |
 | 17 | [Patterns, pitfalls and FAQ](17-patterns-and-faq.md) | Proven structures for real apps and the mistakes to avoid |
 | 18 | [Cheat sheet](18-cheatsheet.md) | Everything on one page |
 | 19 | [Menus, dialogs and notifications](19-menus-and-dialogs.md) | Menu bar, context menus, message boxes, prompts, modal windows, sheets, toasts |

@@ -77,5 +77,7 @@ Insights for inspecting a running PulseUI app.
   Invoke, Toggle, Value, RangeValue and ExpandCollapse patterns. Building with old MinGW-w64 headers
   that lack UI Automation compiles without it (CMake reports it).
 - macOS: `NSAccessibilityElement` per exposed view, with press, increment/decrement, value and focus.
+- Linux: not yet (AT-SPI is planned). `View::accessibility()` and the tree are platform independent, so
+  tests that inspect them work on Linux too.
 
 Next: [back to the contents](README.md).

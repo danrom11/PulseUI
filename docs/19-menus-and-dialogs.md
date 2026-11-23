@@ -56,7 +56,7 @@ win.menu({
 
 - **macOS:** the menu becomes the native application menu bar while the window is active. The standard
   application menu (About, Hide, Hide Others, Show All, Quit) is added in front automatically.
-- **Windows:** the bar is drawn at the top of the window in the current theme (a native Win32 menu bar is
+- **Windows and Linux:** the bar is drawn at the top of the window in the current theme (a native Win32 menu bar is
   always light). `Alt` alone or `F10` moves the keyboard into it: arrows choose a menu, `Enter` or `↓`
   opens it, `Esc` leaves. `Alt+letter` opens a menu by its mnemonic.
 - Shortcuts of all actions work at any time, also when the menu is closed. A disabled action's shortcut

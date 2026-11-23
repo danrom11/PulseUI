@@ -50,5 +50,7 @@ what the last drag out carried (in tests no system drag starts).
 - Windows: OLE drag and drop (`IDropTarget`, `DoDragDrop`); dragged files are offered as a shell data
   object (Explorer copies them), text as `CF_UNICODETEXT`.
 - macOS: `NSDraggingDestination` (file URLs and strings) and `NSDraggingSource`.
+- Linux (X11): not yet. Drags inside the application work (they are PulseUI's own); dragging to or from
+  other applications (XDND) is planned. `start_drag` returns false.
 
 Next: [Accessibility](24-accessibility.md).

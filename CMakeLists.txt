@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PulseUI VERSION 0.4.1 LANGUAGES CXX)
+project(PulseUI VERSION 0.5.0 LANGUAGES CXX)
 
 if(APPLE)
   enable_language(OBJCXX)
@@ -67,8 +67,16 @@ elseif(APPLE)
     src/platform/cocoa/cocoa_a11y.mm
     src/platform/cocoa/cg_painter.mm
   )
+elseif(UNIX)
+  # Linux and other X11 systems: X11 windows, Cairo drawing, Pango text
+  list(APPEND PULSEUI_SOURCES
+    src/platform/x11/x11_platform.cpp
+    src/platform/x11/x11_window.cpp
+    src/platform/x11/x11_dialogs.cpp
+    src/platform/cairo/cairo_painter.cpp
+  )
 else()
-  message(FATAL_ERROR "PulseUI: no backend for this platform yet (Windows and macOS are supported).")
+  message(FATAL_ERROR "PulseUI: no backend for this platform yet (Windows, macOS and Linux/X11 are supported).")
 endif()
 
 add_library(PulseUI STATIC ${PULSEUI_SOURCES})
@@ -119,9 +127,29 @@ elseif(APPLE)
     "-framework AppKit" "-framework CoreGraphics" "-framework CoreText"
     "-framework QuartzCore" "-framework Foundation" "-framework ImageIO")
   target_compile_options(PulseUI PRIVATE -Wall -Wextra -Wno-unused-parameter)
+elseif(UNIX)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(PULSEUI_X11 REQUIRED IMPORTED_TARGET x11 xcursor xkbcommon cairo cairo-xlib pangocairo)
+  target_link_libraries(PulseUI PRIVATE PkgConfig::PULSEUI_X11)
+  # optional: JPEG/GIF/... images (PNG works without it) and the desktop's file
+  # dialog through xdg-desktop-portal (zenity/kdialog are used without it)
+  pkg_check_modules(PULSEUI_PIXBUF IMPORTED_TARGET gdk-pixbuf-2.0)
+  if(PULSEUI_PIXBUF_FOUND)
+    target_link_libraries(PulseUI PRIVATE PkgConfig::PULSEUI_PIXBUF)
+    target_compile_definitions(PulseUI PRIVATE PULSEUI_HAS_GDK_PIXBUF=1)
+  endif()
+  pkg_check_modules(PULSEUI_GIO IMPORTED_TARGET gio-2.0)
+  if(PULSEUI_GIO_FOUND)
+    target_link_libraries(PulseUI PRIVATE PkgConfig::PULSEUI_GIO)
+    target_compile_definitions(PulseUI PRIVATE PULSEUI_HAS_GIO=1)
+  endif()
+  find_package(Threads REQUIRED)
+  target_link_libraries(PulseUI PUBLIC Threads::Threads)
+  target_compile_options(PulseUI PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
 endif()
 
-# Helper for GUI executables: no console window on Windows, .app bundle on macOS.
+# Helper for GUI executables: no console window on Windows, .app bundle on macOS,
+# a plain executable on Linux.
 function(pulseui_add_app NAME)
   add_executable(${NAME} WIN32 MACOSX_BUNDLE ${ARGN})
   target_link_libraries(${NAME} PRIVATE PulseUI::PulseUI)

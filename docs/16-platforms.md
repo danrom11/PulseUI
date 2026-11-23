@@ -1,17 +1,17 @@
 # 16. Platforms
 
 PulseUI has one cross-platform core (views, layout, input, theming, forms) and a thin backend per
-platform. Application code is identical on all platforms.
+platform: Windows, macOS and Linux (X11). Application code is identical on all platforms.
 
-| | Windows | macOS |
-|---|---|---|
-| Windows and events | Win32 | AppKit (Cocoa) |
-| Drawing | Direct2D | CoreGraphics |
-| Text | DirectWrite | CoreText / AppKit |
-| Images | WIC | ImageIO |
-| File dialogs | Common Item Dialog (`IFileDialog`) | `NSOpenPanel` / `NSSavePanel` |
-| HiDPI | per-monitor DPI awareness (v2) | Retina backing scale |
-| Primary modifier (`Mod::Primary`, "Ctrl" in shortcuts) | Ctrl | Cmd |
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Windows and events | Win32 | AppKit (Cocoa) | X11 (Xlib), also on Wayland desktops through XWayland |
+| Drawing | Direct2D | CoreGraphics | Cairo |
+| Text | DirectWrite | CoreText / AppKit | Pango (fontconfig fallback for any script and emoji) |
+| Images | WIC | ImageIO | gdk-pixbuf (PNG through Cairo without it) |
+| File dialogs | Common Item Dialog (`IFileDialog`) | `NSOpenPanel` / `NSSavePanel` | xdg-desktop-portal, else zenity or kdialog |
+| HiDPI | per-monitor DPI awareness (v2) | Retina backing scale | `Xft.dpi` (and `GDK_SCALE`); `PULSEUI_SCALE` overrides |
+| Primary modifier (`Mod::Primary`, "Ctrl" in shortcuts) | Ctrl | Cmd | Ctrl |
 
 ## Coordinates and HiDPI
 
@@ -54,21 +54,49 @@ When a window moves between monitors with different scale factors, it is re-laid
 - "Ctrl" in shortcuts and `e.primary()` mean Cmd, so `"Ctrl+S"` is Cmd+S as Mac users expect.
 - `Window::native_handle()` returns the `NSWindow*`.
 
-## Linux
+## Linux specifics
 
-Not supported yet. The core is portable; a backend (for example Wayland/X11 with Cairo and Pango) is
-the missing piece. Contributions are welcome.
+- The backend talks to an X server. On Wayland desktops (GNOME, KDE Plasma) the app runs through
+  XWayland, which they start automatically; a native Wayland backend is planned.
+- Build dependencies are found with `pkg-config`: `x11`, `xcursor`, `xkbcommon`, `cairo`, `cairo-xlib`,
+  `pangocairo` (required), `gdk-pixbuf-2.0` and `gio-2.0` (optional). See
+  [Getting started](02-getting-started.md#requirements) for the package names.
+- **HiDPI:** the scale is `Xft.dpi / 96` (desktops set `Xft.dpi` to 192 for 200%), multiplied by
+  `GDK_SCALE` when set. `PULSEUI_SCALE=1.5` forces a factor. The scale is read once at startup.
+- **Keyboard:** shortcuts use the key's Latin meaning, so `Ctrl+C` works with any keyboard layout. Text
+  goes through the X input method (XIM, `XMODIFIERS`), so dead keys and compose sequences work; IMEs that
+  only support Wayland protocols are not used through XWayland.
+- **Menus and message boxes** are drawn by PulseUI in the current theme, as on Windows. Modal windows are
+  transient dialogs of their parent (`_NET_WM_STATE_MODAL`); the parent ignores input while one is open.
+- **File dialogs** use the desktop's own dialog through xdg-desktop-portal when it runs (GNOME, KDE and
+  most desktops), else `zenity` or `kdialog`. `PULSEUI_NO_PORTAL=1` skips the portal.
+- **Clipboard:** the `CLIPBOARD` selection with UTF-8 text. The data lives in the application: after it
+  exits the copied text is gone unless a clipboard manager kept it.
+- **No X server** (`DISPLAY` unset, CI, WSL without WSLg): windows exist only in memory. Tests
+  (`pulseui::testing`) and `PULSEUI_SCREENSHOT` work, as rendering is done by Cairo offscreen. Run the
+  app under `xvfb-run` to test a real X connection without a screen.
+- Not yet: drag and drop between applications (XDND) and screen readers (AT-SPI).
+- `Window::native_handle()` returns the X11 window id (`::Window`) cast to `void*`.
+- **Clang and libstdc++:** Clang uses the newest GCC's C++ library it finds. A Clang older than that library may
+  fail on its headers (errors inside `<string>` or `<vector>` such as "member access into incomplete type
+  `__normal_iterator`", for example Clang 16 with GCC 16). Build with `g++`, install a newer Clang, or point
+  Clang to an older GCC with `-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/<version>`.
 
 ## Fonts
 
 The theme's fonts use the system UI font by default: Segoe UI on Windows, the San Francisco system
-font on macOS. `Font::family` selects another installed font by name; `"monospace"` maps to the
-platform's monospace font (Consolas on Windows, the system monospaced font or Menlo on macOS).
+font on macOS, fontconfig's `Sans` on Linux (Ubuntu, Cantarell, Noto Sans, DejaVu Sans... depending on
+the distribution). `Font::family` selects another installed font by name; `"monospace"` maps to the
+platform's monospace font (Consolas on Windows, the system monospaced font or Menlo on macOS,
+fontconfig's `Monospace` on Linux). Metrics differ slightly between fonts, so leave some room in fixed
+sizes.
 
 ## Packaging
 
 PulseUI links statically into your executable. There are no runtime libraries to ship besides the
 compiler runtime (MSVC redistributable or MinGW's `libstdc++`/`libgcc` DLLs, unless you link them
-statically). On macOS, sign and notarize the `.app` as you would any other app.
+statically). On macOS, sign and notarize the `.app` as you would any other app. On Linux the program
+uses the system's X11, Cairo and Pango libraries, which every desktop has; ship the executable (or
+wrap it in an AppImage or a distribution package).
 
 Next: [Patterns, pitfalls and FAQ](17-patterns-and-faq.md).

@@ -2,15 +2,25 @@
 
 ## Requirements
 
-| | Windows | macOS |
-|---|---|---|
-| OS | Windows 10 or 11 | macOS 11+ (Intel and Apple Silicon) |
-| Compiler | Visual Studio 2022 (MSVC), or MinGW-w64 GCC 11+ | Xcode 14+ (AppleClang) |
-| CMake | 3.21+ | 3.21+ |
-| Graphics | Direct2D, DirectWrite, WIC (built into Windows) | AppKit, CoreGraphics, CoreText (built in) |
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| OS | Windows 10 or 11 | macOS 11+ (Intel and Apple Silicon) | X11 desktop, or Wayland with XWayland |
+| Compiler | Visual Studio 2022 (MSVC), or MinGW-w64 GCC 11+ | Xcode 14+ (AppleClang) | GCC 11+ or Clang 14+ |
+| CMake | 3.21+ | 3.21+ | 3.21+ |
+| Graphics | Direct2D, DirectWrite, WIC (built into Windows) | AppKit, CoreGraphics, CoreText (built in) | X11, Cairo, Pango (system packages) |
 
-No other dependencies. [Pulse](https://github.com/danrom11/Pulse) is header-only and is picked up
-automatically.
+On Windows and macOS there are no other dependencies. On Linux install the development packages
+(found with `pkg-config`); on Debian and Ubuntu:
+
+```bash
+sudo apt install build-essential cmake pkg-config libx11-dev libxcursor-dev libxkbcommon-dev                  libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev
+```
+
+`libgdk-pixbuf-2.0-dev` is optional (without it `Image::load` reads PNG only, and file dialogs fall back
+from the desktop portal to zenity/kdialog). Fedora: `libX11-devel libXcursor-devel libxkbcommon-devel
+cairo-devel pango-devel gdk-pixbuf2-devel`.
+
+[Pulse](https://github.com/danrom11/Pulse) is header-only and is picked up automatically.
 
 ## Adding PulseUI to a project
 
@@ -22,7 +32,7 @@ project(HelloPulseUI CXX)
 set(CMAKE_CXX_STANDARD 20)
 
 include(FetchContent)
-FetchContent_Declare(pulseui URL https://github.com/danrom11/PulseUI/archive/0.4.1.tar.gz)
+FetchContent_Declare(pulseui URL https://github.com/danrom11/PulseUI/archive/0.5.0.tar.gz)
 FetchContent_MakeAvailable(pulseui)
 
 pulseui_add_app(hello main.cpp)
@@ -31,7 +41,7 @@ pulseui_add_app(hello main.cpp)
 `pulseui_add_app(name sources...)` is a helper provided by PulseUI. It:
 
 - creates a GUI executable: no console window on Windows (`WIN32`), an `.app` bundle on macOS
-  (`MACOSX_BUNDLE`);
+  (`MACOSX_BUNDLE`), a plain executable on Linux;
 - links `PulseUI::PulseUI`;
 - on MSVC, adds `/utf-8` and `/permissive-` and keeps `int main()` as the entry point, so you do not
   need `WinMain`.
@@ -107,7 +117,7 @@ cmake --build build --config Release
 ```
 
 The executable is in `build/` (Ninja, Makefiles) or `build/Release/` (Visual Studio). On macOS it is
-an app bundle: `open build/hello.app`.
+an app bundle: `open build/hello.app`. On Linux run `./build/hello`.
 
 ## Handy environment variables
 
@@ -115,6 +125,7 @@ an app bundle: `open build/hello.app`.
 |---|---|
 | `PULSEUI_THEME=light` or `dark` | Start with that theme |
 | `PULSEUI_SCREENSHOT=out.png` | Render the first window to a PNG about 0.5 s after start, then exit (for docs and visual checks) |
+| `PULSEUI_SCALE=1.5` | Linux: force the HiDPI scale (default: `Xft.dpi / 96`) |
 
 ## Examples in the repository
 
