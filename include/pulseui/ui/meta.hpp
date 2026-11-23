@@ -32,6 +32,9 @@ struct Property {
   // (a property, computed or observable of the model), e.g. ".model(m.email)".
   // Empty = the property can only hold a fixed value.
   std::function<std::string(const std::string& expr)> bind;
+  // One-way variant used where two-way is impossible (inside a list row, where
+  // the expression is a field of the row's item), e.g. ".bind_text(item.title)".
+  std::function<std::string(const std::string& expr)> bind_once;
   // What the bound expression should be, shown by the designer ("property<std::string>").
   std::string bind_hint;
 };
@@ -53,6 +56,10 @@ struct TypeInfo {
   std::vector<Property> props;
   std::vector<Event> events;
   std::string cpp_class; // C++ class when it differs from `name` ("Image" -> "ImageView")
+  // Filled in when the designer adds a new view of this type (default pages, a row template...).
+  std::function<void(View&)> init_new;
+  // Containers whose children are wrapped in generated code: Tabs -> Tab("title", child).
+  std::function<std::string(View&, std::size_t index)> child_title;
 };
 
 const std::vector<TypeInfo>& types();

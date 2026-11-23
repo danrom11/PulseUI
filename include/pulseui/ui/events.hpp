@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <pulseui/core/geometry.hpp>
 
@@ -13,6 +14,8 @@ enum class Key {
   F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
   Escape, Tab, Backspace, Enter, Space, Insert, Delete, Home, End, PageUp, PageDown,
   Left, Right, Up, Down, Shift, Control, Alt, Super,
+  Slash, // the "/ ?" key (US layout position)
+  Menu,  // the context-menu key
 };
 
 namespace Mod {
@@ -45,6 +48,13 @@ struct InputEvent {
   bool is_mouse() const { return type <= Wheel; }
   bool is_key() const { return type == KeyDown || type == KeyUp; }
   bool primary() const { return (mods & Mod::Primary) != 0; }
+};
+
+// Data carried by drag and drop (between views, windows and other applications).
+struct DragData {
+  std::vector<std::string> files; // absolute paths
+  std::string text;               // UTF-8
+  bool empty() const { return files.empty() && text.empty(); }
 };
 
 // "Ctrl+S", "Ctrl+Shift+Z", "F5". "Ctrl" means Cmd on macOS (like Qt).

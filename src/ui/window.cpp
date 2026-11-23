@@ -9,6 +9,12 @@
 
 namespace pulseui {
 
+namespace detail {
+std::unique_ptr<View> make_menu_bar(MenuItems items);
+bool menu_bar_key(View* bar, const InputEvent& e, bool alt_alone_released);
+View* open_menu(Window& w, MenuItems items, Point at, std::function<void()> on_closed);
+} // namespace detail
+
 // ═════════════════════════════════════════════════════════════════════════════
 // App
 // ═════════════════════════════════════════════════════════════════════════════
@@ -110,6 +116,12 @@ int run(std::string title, float width, float height, Node root) {
 // ═════════════════════════════════════════════════════════════════════════════
 const std::vector<Window*>& Window::all() { return g_windows; }
 
+namespace {
+bool g_headless = false;
+}
+void Window::set_headless(bool on) { g_headless = on; }
+bool Window::headless() { return g_headless; }
+
 Window::Window(Bind<std::string> title, float width, float height) {
   platform::init();
   platform::WindowConfig cfg;
@@ -138,6 +150,9 @@ Window::~Window() {
   *alive_ = false;
   tooltip_timer_.reset();
   popups_.clear();
+  if (menu_bar_) menu_bar_->unmount();
+  menu_bar_.reset();
+  menu_subs_.clear();
   if (root_) root_->unmount();
   root_.reset();
   graveyard_.clear();
@@ -160,7 +175,42 @@ void Window::show() {
   if (!native_) return;
   shown_ = true;
   hide_requested_ = false;
+  if (g_headless) return;
   native_->show();
+}
+
+void Window::activate() {
+  if (native_ && !g_headless) native_->activate();
+}
+
+void Window::show_modal(Window& parent) {
+  if (!native_) return;
+  if (parent.native_) native_->set_modal_parent(parent.native_.get());
+  show();
+}
+
+void Window::run_modal(Window* parent) {
+  if (parent) show_modal(*parent);
+  else show();
+  std::weak_ptr<bool> alive = alive_;
+  platform::run_modal_loop([this, alive] { return alive.expired() || destroyed_ || !native_; });
+}
+
+void Window::set_resizable(bool r) {
+  if (native_) native_->set_resizable(r);
+}
+
+void Window::fit_content(float max_width) {
+  float top = 0;
+  if (menu_bar_) top = menu_bar_->measure({max_width, 10000}).h;
+  if (!root_) return;
+  Size s = root_->measure({max_width, 10000});
+  s.w = std::min(std::ceil(s.w), max_width);
+  // a second pass at the final width (wrapped text gets taller when narrower)
+  s.h = root_->measure({s.w, 10000}).h;
+  resize(std::max(s.w, 120.f), std::ceil(s.h + top));
+  size_ = native_ ? native_->size() : Size{s.w, s.h + top};
+  request_layout();
 }
 
 void Window::hide() {
@@ -208,17 +258,48 @@ void Window::update_layout() { ensure_layout(); }
 void Window::ensure_layout() {
   if (!layout_dirty_) return;
   layout_dirty_ = false;
+  float top = 0;
+  if (menu_bar_) {
+    top = std::min(size_.h, menu_bar_->measure({size_.w, size_.h}).h);
+    menu_bar_->set_frame({0, 0, size_.w, top});
+    menu_bar_->layout();
+  }
   if (root_) {
-    root_->set_frame({0, 0, size_.w, size_.h});
+    root_->set_frame({0, top, size_.w, std::max(0.f, size_.h - top)});
     root_->layout();
   }
-  for (auto& p : popups_) {
-    Size s = p.view->measure({size_.w, size_.h});
+  float stack_bottom = size_.h, stack_top = top; // BottomRight / TopCenter popups stack up
+  for (auto it = popups_.rbegin(); it != popups_.rend(); ++it) {
+    Popup& p = *it;
+    const PopupOptions& o = p.options;
+    Size s = p.view->measure({size_.w - 2 * (o.place == PopupOptions::Place::At ? 0 : o.margin), size_.h});
     s.w = std::min(s.w, size_.w);
     s.h = std::min(s.h, size_.h);
-    float x = std::clamp(p.at.x, 0.f, std::max(0.f, size_.w - s.w));
-    float y = p.at.y;
-    if (y + s.h > size_.h) y = std::max(0.f, size_.h - s.h);
+    float x = 0, y = 0;
+    switch (o.place) {
+      case PopupOptions::Place::At:
+        x = std::clamp(p.at.x, 0.f, std::max(0.f, size_.w - s.w));
+        y = p.at.y;
+        if (y + s.h > size_.h) {
+          const float above = o.anchor.w > 0 ? o.anchor.y - 4 - s.h : -1;
+          y = above >= 0 ? above : std::max(0.f, size_.h - s.h);
+        }
+        break;
+      case PopupOptions::Place::Center:
+        x = std::max(0.f, (size_.w - s.w) / 2);
+        y = std::max(top, top + (size_.h - top - s.h) / 3);
+        break;
+      case PopupOptions::Place::BottomRight:
+        x = std::max(0.f, size_.w - s.w - o.margin);
+        y = std::max(0.f, stack_bottom - s.h - o.margin);
+        stack_bottom = y + o.margin - 8;
+        break;
+      case PopupOptions::Place::TopCenter:
+        x = std::max(0.f, (size_.w - s.w) / 2);
+        y = stack_top + o.margin;
+        stack_top = y + s.h - o.margin + 8;
+        break;
+    }
     p.view->set_frame({x, y, s.w, s.h});
     p.view->layout();
   }
@@ -229,10 +310,22 @@ void Window::handle_paint(Painter& p) {
   const Theme& t = th();
   p.fill_rect({0, 0, size_.w, size_.h}, t.window);
   if (root_) root_->paint_tree(p);
+  if (menu_bar_) menu_bar_->paint_tree(p);
+  if (drop_target_) {
+    const Point tl = drop_target_->to_window({0, 0});
+    const Rect r{tl.x, tl.y, drop_target_->frame().w, drop_target_->frame().h};
+    const float rad = std::max(drop_target_->style().radius, t.radius_small);
+    p.fill_rect(r, t.accent.with_alpha(0.12f), rad);
+    p.stroke_rect(r.inset(1), t.accent, 2, rad);
+  }
   for (auto& pop : popups_) {
     const Rect f = pop.view->frame();
-    for (int i = 3; i >= 1; --i)
-      p.fill_rect(f.outset(static_cast<float>(i) * 2).translated(0, 3), t.shadow.with_alpha(t.shadow.a * 0.25f), t.radius + i * 2);
+    const float op = pop.view->style().opacity;
+    if (pop.options.backdrop) p.fill_rect({0, 0, size_.w, size_.h}, Color::black().with_alpha(0.35f * op));
+    if (pop.options.shadow && pop.view->is_visible())
+      for (int i = 3; i >= 1; --i)
+        p.fill_rect(f.outset(static_cast<float>(i) * 2).translated(0, 3), t.shadow.with_alpha(t.shadow.a * 0.25f * op),
+                    t.radius + i * 2);
     pop.view->paint_tree(p);
   }
   if (tooltip_view_ && !tooltip_text_.empty()) {
@@ -269,8 +362,11 @@ View* Window::hit_in(View* v, Point local) {
 }
 
 View* Window::hit(Point p) {
-  for (auto it = popups_.rbegin(); it != popups_.rend(); ++it)
-    if (it->view->frame().contains(p)) return hit_in(it->view.get(), p - it->view->frame().pos());
+  for (auto it = popups_.rbegin(); it != popups_.rend(); ++it) {
+    if (it->view->is_visible() && it->view->frame().contains(p)) return hit_in(it->view.get(), p - it->view->frame().pos());
+    if (it->options.backdrop) return it->view.get(); // a modal sheet blocks what is behind it
+  }
+  if (menu_bar_ && menu_bar_->frame().contains(p)) return hit_in(menu_bar_.get(), p - menu_bar_->frame().pos());
   return root_ ? hit_in(root_.get(), p - root_->frame().pos()) : nullptr;
 }
 
@@ -352,6 +448,25 @@ void Window::handle_input(InputEvent e) {
   switch (e.type) {
     case InputEvent::MouseMove: {
       tooltip_pos_ = e.window_pos;
+      if (drag_candidate_) {
+        const Point d = e.window_pos - drag_from_;
+        if (d.x * d.x + d.y * d.y > 25) { // moved 5 px with the button down: start dragging
+          View* src = drag_candidate_;
+          drag_candidate_ = nullptr;
+          DragData data = src->extras_if()->drag_source();
+          if (!data.empty()) {
+            std::weak_ptr<bool> alive = alive_;
+            start_drag(data);
+            if (alive.expired()) return;
+            // the system drag swallowed the button release: finish the press here
+            InputEvent up = e;
+            up.type = InputEvent::MouseUp;
+            up.button = MouseButton::Left;
+            handle_input(up);
+            return;
+          }
+        }
+      }
       if (capture_) {
         bubble(capture_, e, false);
       } else {
@@ -370,26 +485,41 @@ void Window::handle_input(InputEvent e) {
       hide_tooltip();
       break;
     case InputEvent::MouseDown: {
+      alt_alone_ = false;
       hide_tooltip();
       View* v = hit(e.window_pos);
+      drag_candidate_ = nullptr;
+      if (e.button == MouseButton::Left)
+        for (View* x = v; x; x = x->parent())
+          if (x->extras_if() && x->extras_if()->drag_source && x->is_enabled()) {
+            drag_candidate_ = x;
+            drag_from_ = e.window_pos;
+            break;
+          }
       if (!popups_.empty()) {
         bool inside = false;
         for (View* x = v; x; x = x->parent())
           for (auto& p : popups_)
             if (p.view.get() == x) inside = true;
         if (!inside) {
-          while (!popups_.empty()) close_popup(popups_.back().view.get());
+          // close the dismissible popups (menus, drop-downs); toasts and sheets stay
+          std::vector<View*> doomed;
+          for (auto it = popups_.rbegin(); it != popups_.rend(); ++it)
+            if (it->options.dismiss_on_outside) doomed.push_back(it->view.get());
+          for (View* d : doomed) close_popup(d);
           request_layout();
-          break;
+          if (!doomed.empty()) break;
         }
       }
       View* focus_target = nullptr;
-      for (View* x = v; x; x = x->parent())
-        if (x->focusable() && x->is_enabled()) {
-          focus_target = x;
-          break;
-        }
-      set_focus(focus_target);
+      bool in_popup = false;
+      for (View* x = v; x; x = x->parent()) {
+        if (!focus_target && x->focusable() && x->is_enabled()) focus_target = x;
+        for (auto& p : popups_)
+          if (p.view.get() == x) in_popup = true;
+      }
+      // a click on a popup without focusable views (suggestions, toasts) keeps the focus
+      if (focus_target || !in_popup) set_focus(focus_target);
       if (v) {
         View* h = bubble(v, e, true);
         if (h) {
@@ -401,6 +531,7 @@ void Window::handle_input(InputEvent e) {
       break;
     }
     case InputEvent::MouseUp: {
+      drag_candidate_ = nullptr;
       if (capture_) {
         View* c = capture_;
         std::weak_ptr<bool> alive = c->alive_;
@@ -414,6 +545,7 @@ void Window::handle_input(InputEvent e) {
       } else if (View* v = hit(e.window_pos)) {
         bubble(v, e, false);
       }
+      if (e.button == MouseButton::Right) open_context_menu(hit(e.window_pos), e.window_pos);
       break;
     }
     case InputEvent::Wheel:
@@ -421,13 +553,33 @@ void Window::handle_input(InputEvent e) {
       if (View* v = hit(e.window_pos)) bubble(v, e, false);
       break;
     case InputEvent::KeyDown: {
+      alt_alone_ = e.key == Key::Alt && (!e.repeat || alt_alone_);
+      if (menu_bar_ && detail::menu_bar_key(menu_bar_.get(), e, false)) break;
+      if ((e.key == Key::Menu || (e.key == Key::F10 && e.mods == Mod::Shift)) && focus_) {
+        const Point at = focus_->to_window({8, std::min(focus_->frame().h, 24.f)});
+        if (open_context_menu(focus_, at)) break;
+      }
       if (focus_ && bubble(focus_, e, false)) break;
       if (e.key == Key::Escape && !popups_.empty()) {
-        close_popup(popups_.back().view.get());
-        break;
+        View* top_popup = nullptr;
+        for (auto it = popups_.rbegin(); it != popups_.rend() && !top_popup; ++it)
+          if (it->options.dismiss_on_outside || it->options.backdrop) top_popup = it->view.get();
+        if (top_popup) {
+          close_popup(top_popup);
+          break;
+        }
       }
       bool done = false;
       for (auto& sc : shortcuts_) {
+        if (sc.sc.matches(e)) {
+          auto fn = sc.fn;
+          fn();
+          done = true;
+          break;
+        }
+      }
+      if (done) break;
+      for (auto& sc : menu_shortcuts_) {
         if (sc.sc.matches(e)) {
           auto fn = sc.fn;
           fn();
@@ -440,6 +592,11 @@ void Window::handle_input(InputEvent e) {
       break;
     }
     case InputEvent::KeyUp:
+      if (e.key == Key::Alt && alt_alone_ && menu_bar_) {
+        alt_alone_ = false;
+        detail::menu_bar_key(menu_bar_.get(), e, true);
+        break;
+      }
       if (focus_) bubble(focus_, e, false);
       break;
     case InputEvent::Text:
@@ -463,6 +620,7 @@ void Window::set_focus(View* v) {
   focus_ = v;
   if (old) old->on_focus(false);
   if (v) v->on_focus(true);
+  if (native_ && focus_ == v) native_->a11y_focus_changed(v);
   request_paint();
 }
 
@@ -495,18 +653,53 @@ void Window::view_detached(View* v) {
   }
   if (focus_ == v) focus_ = nullptr;
   if (tooltip_view_ == v) tooltip_view_ = nullptr;
+  if (drop_target_ == v) drop_target_ = nullptr;
+  if (drag_candidate_ == v) drag_candidate_ = nullptr;
 }
 
 // ── popups ───────────────────────────────────────────────────────────────────
 
 View* Window::open_popup(Node popup, Point at, std::function<void()> on_dismiss) {
+  return open_popup(std::move(popup), PopupOptions{}, std::move(on_dismiss), at);
+}
+
+View* Window::open_popup(Node popup, PopupOptions options, std::function<void()> on_dismiss, Point at) {
   auto v = popup.release();
   if (!v) return nullptr;
   View* raw = v.get();
-  popups_.push_back({std::move(v), std::move(on_dismiss), at});
+  popups_.push_back({std::move(v), std::move(on_dismiss), at, options});
   raw->mount(this);
   request_layout();
   return raw;
+}
+
+View* Window::open_dropdown(Node popup, View& anchor, std::function<void()> on_dismiss) {
+  PopupOptions o;
+  const Point tl = anchor.to_window({0, 0});
+  o.anchor = {tl.x, tl.y, anchor.frame().w, anchor.frame().h};
+  if (popup && popup->style().min_width < o.anchor.w) popup->style().min_width = o.anchor.w;
+  return open_popup(std::move(popup), o, std::move(on_dismiss), {tl.x, tl.y + anchor.frame().h + 4});
+}
+
+View* Window::present(Node sheet, std::function<void()> on_dismiss) {
+  PopupOptions o;
+  o.place = PopupOptions::Place::Center;
+  o.backdrop = true;
+  o.dismiss_on_outside = false;
+  View* v = open_popup(std::move(sheet), o, std::move(on_dismiss));
+  if (v) {
+    // focus the first focusable view of the sheet
+    std::vector<View*> list;
+    collect_focusable(v, list);
+    set_focus(list.empty() ? nullptr : list.front());
+  }
+  return v;
+}
+
+std::vector<View*> Window::popups() const {
+  std::vector<View*> out;
+  for (auto& p : popups_) out.push_back(p.view.get());
+  return out;
 }
 
 void Window::close_popup(View* popup) {
@@ -523,6 +716,94 @@ void Window::close_popup(View* popup) {
   });
   if (p.on_dismiss) p.on_dismiss();
   request_layout();
+}
+
+// ── drag and drop ────────────────────────────────────────────────────────────
+
+bool Window::handle_drag(DragPhase phase, Point pos, const DragData& data) {
+  ensure_layout();
+  View* target = nullptr;
+  if (phase != DragPhase::Leave)
+    for (View* x = hit(pos); x; x = x->parent())
+      if (x->is_enabled() && x->accepts_drop(data)) {
+        target = x;
+        break;
+      }
+  const bool window_takes = !data.files.empty() && static_cast<bool>(on_drop_files);
+  if (phase == DragPhase::Drop || phase == DragPhase::Leave) {
+    if (drop_target_) request_paint();
+    drop_target_ = nullptr;
+  } else if (target != drop_target_) {
+    drop_target_ = target;
+    request_paint();
+  }
+  if (phase != DragPhase::Drop) return target != nullptr || (phase != DragPhase::Leave && window_takes);
+  if (target && target->deliver_drop(data)) return true;
+  if (window_takes) {
+    auto fn = on_drop_files;
+    fn(data.files);
+    return true;
+  }
+  return false;
+}
+
+bool Window::start_drag(const DragData& data) {
+  last_drag_ = data;
+  if (headless() || !native_) return false;
+  return platform::start_drag(native_.get(), data);
+}
+
+// ── menus ────────────────────────────────────────────────────────────────────
+
+namespace {
+void collect_menu_shortcuts(const MenuItems& items, std::vector<std::pair<Shortcut, MenuEntry>>& out) {
+  for (auto& e : items) {
+    if (e.kind == MenuEntry::Kind::Submenu) collect_menu_shortcuts(e.items, out);
+    else if (e.kind == MenuEntry::Kind::Action && !e.shortcut_.empty()) out.push_back({Shortcut::parse(e.shortcut_), e});
+  }
+}
+} // namespace
+
+Window& Window::menu(MenuItems items) {
+  menu_items_ = std::move(items);
+  menu_shortcuts_.clear();
+  menu_subs_.clear();
+  std::vector<std::pair<Shortcut, MenuEntry>> scs;
+  collect_menu_shortcuts(menu_items_, scs);
+  for (auto& [sc, entry] : scs) {
+    auto enabled = std::make_shared<bool>(true);
+    if (!entry.enabled_.empty())
+      menu_subs_.push_back(entry.enabled_.attach([enabled](const bool& b) { *enabled = b; }));
+    MenuEntry e = entry;
+    menu_shortcuts_.push_back({sc, [enabled, e] {
+                                 if (*enabled) e.trigger();
+                               }});
+  }
+  if (menu_bar_) {
+    menu_bar_->unmount();
+    graveyard_.push_back(std::move(menu_bar_));
+  }
+  const bool native = native_ && platform::set_native_menu(native_.get(), menu_items_);
+  if (!native && !menu_items_.empty()) {
+    menu_bar_ = detail::make_menu_bar(menu_items_);
+    menu_bar_->mount(this);
+  }
+  request_layout();
+  return *this;
+}
+
+View* Window::popup_menu(MenuItems items, Point at, std::function<void()> on_closed) {
+  return detail::open_menu(*this, std::move(items), at, std::move(on_closed));
+}
+
+bool Window::open_context_menu(View* v, Point window_pos) {
+  for (View* x = v; x; x = x->parent()) {
+    if (!x->has_context_menu() || !x->is_enabled()) continue;
+    MenuItems items = x->extras_if()->context_menu();
+    if (items.empty()) return false;
+    return popup_menu(std::move(items), window_pos) != nullptr;
+  }
+  return false;
 }
 
 // ── lifecycle ────────────────────────────────────────────────────────────────

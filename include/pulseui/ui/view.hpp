@@ -15,8 +15,14 @@
 #include <pulseui/core/color.hpp>
 #include <pulseui/core/geometry.hpp>
 #include <pulseui/gfx/painter.hpp>
+#include <optional>
+
+#include <pulse/core/subscription.hpp>
+#include <pulseui/ui/accessibility.hpp>
+#include <pulseui/ui/animation.hpp>
 #include <pulseui/ui/bind.hpp>
 #include <pulseui/ui/events.hpp>
+#include <pulseui/ui/menu.hpp>
 
 // Declares a chainable modifier in two flavours: on an lvalue it returns
 // Self&, on a temporary it returns Self&& - so `return Text("x").padding(4);`
@@ -80,6 +86,28 @@ struct Style {
   float radius = 0;
   bool clip = false;
   float opacity = 1;
+  // placement inside a Grid (-1 = next free cell)
+  int grid_row = -1, grid_col = -1, row_span = 1, col_span = 1;
+};
+
+// Rarely used per-view data, allocated on first use so plain views stay small.
+struct ViewExtras {
+  MenuProvider context_menu; // right click / Shift+F10 / the Menu key
+  // .animate(): frame, opacity, background and border changes glide
+  std::optional<Transition> transition;
+  Rect frame_target{};
+  bool frame_valid = false;
+  pulse::subscription frame_anim, opacity_anim, background_anim, border_anim;
+  // drag and drop
+  std::function<void(const std::vector<std::string>&)> on_drop_files;
+  std::vector<std::string> drop_extensions; // ".png" (lower case); empty = any file
+  std::function<void(const std::string&)> on_drop_text;
+  std::function<DragData()> drag_source;
+  // accessibility overrides
+  std::optional<Role> a11y_role;
+  std::optional<std::string> a11y_label;
+  std::string a11y_description;
+  bool a11y_hidden = false;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,6 +135,8 @@ public:
   View* parent() const { return parent_; }
   Window* window() const { return window_; }
   bool mounted() const { return window_ != nullptr; }
+  // Expires when the view is destroyed (to check a stored View* before use).
+  std::weak_ptr<bool> alive_token() const { return alive_; }
   const std::vector<std::unique_ptr<View>>& children() const { return children_; }
 
   View& add(Node n);
@@ -115,6 +145,9 @@ public:
   void remove(View* child) { take(child); }
   void clear_children();
   void move_child(View* child, std::size_t new_index);
+  // Puts the children in this order without unmounting them (all must be children; others go last).
+  void reorder(const std::vector<View*>& order);
+  bool contains(const View* v) const; // v is this view or one of its descendants
   int index_of(const View* child) const;
 
   View* find(std::string_view id);
@@ -142,6 +175,13 @@ public:
   Point from_window(Point p) const { return p - to_window({0, 0}); }
   void set_frame(const Rect& r);
 
+  // Appearance setters (animated when the view has .animate()).
+  void set_opacity(float o);
+  void set_background(Color c);
+  void set_border_color(Color c);
+  bool animated() const { return extras_ && extras_->transition.has_value(); }
+  const Rect& target_frame() const { return extras_ && extras_->frame_valid ? extras_->frame_target : frame_; }
+
   bool is_visible() const { return visible_; }
   void set_visible(bool v);
   bool is_enabled() const; // includes ancestors
@@ -156,6 +196,25 @@ public:
   Cursor cursor() const { return cursor_; }
   void set_cursor(Cursor c) { cursor_ = c; }
   bool enabled_self() const { return enabled_; }
+
+  // ── extras ───────────────────────────────────────────────────────────────
+  ViewExtras& extras();                                   // created on first use
+  const ViewExtras* extras_if() const { return extras_.get(); }
+  bool has_context_menu() const { return extras_ && extras_->context_menu; }
+  // Would this view take the dragged data? (files filtered by extension)
+  bool accepts_drop(const DragData& d) const;
+  // Delivers a drop; returns false when nothing was taken.
+  bool deliver_drop(const DragData& d);
+
+  // ── accessibility ────────────────────────────────────────────────────────
+  // Describes the view for screen readers. Overrides call View::accessibility
+  // first (focus/enabled states, tooltip) and then fill in role, name and value.
+  virtual void accessibility(A11yInfo& info) const;
+  // Performs an action asked for by a screen reader. Returns false if unsupported.
+  virtual bool accessibility_action(A11yAction a, const std::string& arg = {});
+  // accessibility() with the .a11y_*() overrides applied
+  A11yInfo a11y_info() const;
+  bool a11y_hidden() const { return extras_ && extras_->a11y_hidden; }
 
   // ── reactivity ───────────────────────────────────────────────────────────
   // Follow `b`: apply(view, value) runs now for a static value, or on every
@@ -228,8 +287,9 @@ protected:
   bool focusable_ = false;
   bool hover_repaint_ = false; // repaint on hover / press changes
   std::unique_ptr<std::vector<std::pair<std::string, std::string>>> annotations_;
+  std::unique_ptr<ViewExtras> extras_;
 
-  template <class D>
+  template <class D, class Base>
   friend class ViewT;
   friend class Window;
 };
@@ -273,8 +333,10 @@ void View::bind(const Bind<T>& b, F apply) {
 // ViewT<D>: chainable modifiers returning the concrete view type.
 //   Text("Hi").font_size(18).padding(8).background(th().surface)
 // ─────────────────────────────────────────────────────────────────────────────
-template <class D>
-class ViewT : public View {
+// `Base` lets a non-template view class (with code in a .cpp) get the
+// modifiers too: class List : public ViewT<List, ListBase>.
+template <class D, class Base = View>
+class ViewT : public Base {
 public:
   D& self() { return static_cast<D&>(*this); }
 
@@ -283,46 +345,74 @@ public:
   using View::cursor;
   using View::id;
   using View::tooltip;
+  using Base::Base;
 
-  PULSEUI_MOD(D, id, (std::string v), set_id(std::move(v));)
-  PULSEUI_MOD(D, padding, (Insets p), style_.padding = p;)
-  PULSEUI_MOD(D, width, (float w), style_.width = w;)
-  PULSEUI_MOD(D, height, (float h), style_.height = h;)
-  PULSEUI_MOD(D, size, (float w, float h), style_.width = w; style_.height = h;)
-  PULSEUI_MOD(D, min_width, (float w), style_.min_width = w;)
-  PULSEUI_MOD(D, min_height, (float h), style_.min_height = h;)
-  PULSEUI_MOD(D, max_width, (float w), style_.max_width = w;)
-  PULSEUI_MOD(D, max_height, (float h), style_.max_height = h;)
-  PULSEUI_MOD(D, flex, (float grow = 1), style_.flex = grow;)
-  PULSEUI_MOD(D, align, (Alignment a), style_.align = a;)
-  PULSEUI_MOD(D, position, (float x, float y), style_.positioned = true; style_.position = {x, y};)
-  PULSEUI_MOD(D, radius, (float r), style_.radius = r;)
-  PULSEUI_MOD(D, clip, (bool c = true), style_.clip = c;)
-  PULSEUI_MOD(D, opacity, (float o), style_.opacity = o;)
-  PULSEUI_MOD(D, tooltip, (Bind<std::string> t), bind(t, [](View& v, const std::string& x) { v.set_tooltip(x); });)
-  PULSEUI_MOD(D, cursor, (Cursor c), cursor_ = c;)
-  PULSEUI_MOD(D, focusable, (bool f = true), focusable_ = f;)
+  PULSEUI_MOD(D, id, (std::string v), this->set_id(std::move(v));)
+  PULSEUI_MOD(D, padding, (Insets p), this->style_.padding = p;)
+  PULSEUI_MOD(D, width, (float w), this->style_.width = w;)
+  PULSEUI_MOD(D, height, (float h), this->style_.height = h;)
+  PULSEUI_MOD(D, size, (float w, float h), this->style_.width = w; this->style_.height = h;)
+  PULSEUI_MOD(D, min_width, (float w), this->style_.min_width = w;)
+  PULSEUI_MOD(D, min_height, (float h), this->style_.min_height = h;)
+  PULSEUI_MOD(D, max_width, (float w), this->style_.max_width = w;)
+  PULSEUI_MOD(D, max_height, (float h), this->style_.max_height = h;)
+  PULSEUI_MOD(D, flex, (float grow = 1), this->style_.flex = grow;)
+  PULSEUI_MOD(D, align, (Alignment a), this->style_.align = a;)
+  PULSEUI_MOD(D, position, (float x, float y), this->style_.positioned = true; this->style_.position = {x, y};)
+  PULSEUI_MOD(D, radius, (float r), this->style_.radius = r;)
+  PULSEUI_MOD(D, clip, (bool c = true), this->style_.clip = c;)
+  PULSEUI_MOD(D, opacity, (Bind<float> o), this->bind(o, [](View& v, float x) { v.set_opacity(x); });)
+  // Changes of frame (position and size), opacity, background and border glide
+  // instead of jumping: .animate(), .animate(300ms), .animate(250ms, Easing::Spring)
+  PULSEUI_MOD(D, animate, (Transition tr = {}), this->extras().transition = tr;)
+  PULSEUI_MOD(D, animate, (std::chrono::milliseconds d, Easing e), this->extras().transition = Transition(d, e);)
+  PULSEUI_MOD(D, tooltip, (Bind<std::string> t), this->bind(t, [](View& v, const std::string& x) { v.set_tooltip(x); });)
+  PULSEUI_MOD(D, cursor, (Cursor c), this->cursor_ = c;)
+  PULSEUI_MOD(D, focusable, (bool f = true), this->focusable_ = f;)
+  // Grid placement: .cell(row, col) and spans; .span(n) spans n columns in auto-flow.
+  PULSEUI_MOD(D, cell, (int row, int col, int row_span = 1, int col_span = 1), this->style_.grid_row = row;
+              this->style_.grid_col = col; this->style_.row_span = std::max(1, row_span); this->style_.col_span = std::max(1, col_span);)
+  PULSEUI_MOD(D, span, (int cols), this->style_.col_span = std::max(1, cols);)
 
-  PULSEUI_MOD(D, background, (Bind<Color> c),
-              bind(c, [](View& v, const Color& x) { v.style_.background = x; v.invalidate(); });)
-  PULSEUI_MOD(D, border, (Bind<Color> c, float width = 1), style_.border_width = width;
-              bind(c, [](View& v, const Color& x) { v.style_.border = x; v.invalidate(); });)
-  PULSEUI_MOD(D, visible, (Bind<bool> b), bind(b, [](View& v, bool x) { v.set_visible(x); });)
-  PULSEUI_MOD(D, enabled, (Bind<bool> b), bind(b, [](View& v, bool x) { v.set_enabled(x); });)
+  PULSEUI_MOD(D, background, (Bind<Color> c), this->bind(c, [](View& v, const Color& x) { v.set_background(x); });)
+  PULSEUI_MOD(D, border, (Bind<Color> c, float width = 1), this->style_.border_width = width;
+              this->bind(c, [](View& v, const Color& x) { v.set_border_color(x); });)
+  PULSEUI_MOD(D, visible, (Bind<bool> b), this->bind(b, [](View& v, bool x) { v.set_visible(x); });)
+  PULSEUI_MOD(D, enabled, (Bind<bool> b), this->bind(b, [](View& v, bool x) { v.set_enabled(x); });)
 
   // Any view can be clicked.
-  PULSEUI_MOD(D, on_click, (std::function<void()> fn), click_handlers_.push_back(std::move(fn));
-              if (cursor_ == Cursor::Arrow) cursor_ = Cursor::Hand;)
-  PULSEUI_MOD(D, on_hover, (std::function<void(bool)> fn), hover_handlers_.push_back(std::move(fn));)
+  PULSEUI_MOD(D, on_click, (std::function<void()> fn), this->click_handlers_.push_back(std::move(fn));
+              if (this->cursor_ == Cursor::Arrow) this->cursor_ = Cursor::Hand;)
+  PULSEUI_MOD(D, on_hover, (std::function<void(bool)> fn), this->hover_handlers_.push_back(std::move(fn));)
   // Raw event stream callback.
   PULSEUI_MOD(D, on_event_fn, (std::function<void(const InputEvent&)> fn),
-              defer([fn](View& v) { v.keep(v.events().connect(fn).scoped()); });)
+              this->defer([fn](View& v) { v.keep(v.events().connect(fn).scoped()); });)
+  // A context menu (right click, Shift+F10). The function form builds the
+  // entries when the menu opens, e.g. from the row under the mouse.
+  PULSEUI_MOD(D, context_menu, (MenuItems items), this->extras().context_menu = [items] { return items; };)
+  PULSEUI_MOD(D, context_menu, (MenuProvider fn), this->extras().context_menu = std::move(fn);)
+  // Files dragged from Explorer / Finder (or another app) onto this view. While
+  // they hover over it the view is highlighted. Extensions filter what is taken.
+  //   ImageView(path).on_drop_files([&](auto& files) { path = files[0]; }, {".png", ".jpg"})
+  PULSEUI_MOD(D, on_drop_files, (std::function<void(const std::vector<std::string>&)> fn, std::vector<std::string> extensions = {}),
+              this->extras().on_drop_files = std::move(fn); this->extras().drop_extensions = std::move(extensions);)
+  PULSEUI_MOD(D, on_drop_text, (std::function<void(const std::string&)> fn), this->extras().on_drop_text = std::move(fn);)
+  // Dragging this view out starts a system drag with the returned files/text
+  // (drop them into Explorer, Finder, an editor or another view).
+  PULSEUI_MOD(D, drag_source, (std::function<DragData()> fn), this->extras().drag_source = std::move(fn);)
+  // Accessibility overrides: the name a screen reader announces, the role, a
+  // longer description, or hiding a decorative view (and its children).
+  PULSEUI_MOD(D, a11y_label, (Bind<std::string> s),
+              this->bind(s, [](View& v, const std::string& x) { v.extras().a11y_label = x; });)
+  PULSEUI_MOD(D, a11y_role, (Role r), this->extras().a11y_role = r;)
+  PULSEUI_MOD(D, a11y_description, (std::string s), this->extras().a11y_description = std::move(s);)
+  PULSEUI_MOD(D, a11y_hidden, (bool h = true), this->extras().a11y_hidden = h;)
   // Get a pointer to the live view after mount (for imperative access).
   PULSEUI_MOD(D, ref, (D*& out), D** slot = &out;
-              ref_setter_ = [slot](View& v) { *slot = static_cast<D*>(&v); };)
+              this->ref_setter_ = [slot](View& v) { *slot = static_cast<D*>(&v); };)
   // Lifecycle hook with access to the mounted view.
   PULSEUI_MOD(D, on_mount_fn, (std::function<void(D&)> fn),
-              defer([fn](View& v) { fn(static_cast<D&>(v)); });)
+              this->defer([fn](View& v) { fn(static_cast<D&>(v)); });)
 };
 
 } // namespace pulseui

@@ -181,8 +181,24 @@ views whose id can become a C++ member: valid identifiers, first occurrence, not
 
 Pulse Layer generates a `ui_<form>.hpp` per form from these pieces: a struct with `form_title`,
 `form_width` and `form_height`, a typed pointer per `form_refs()` entry, and
-`setup(Window&, Model&)` / `build(Model&)`. The generated code uses only the public, declarative API, so
-it reads like hand-written code.
+`setup(Window&, Model&)` / `build(Model&)`, and a static `part(Model&)` used when the form is embedded in
+another form. The generated code uses only the public, declarative API, so it reads like hand-written code.
+
+### Lists, tabs, canvases and components in forms
+
+| Type in the form | Generated code |
+|---|---|
+| `ForEach` (a `ForEachTemplate` with the row as children; `bind.items` -> a vector member, props `item`, `key`, `virtualized`, `row_height`) | `ForEach(m.todos, [&](const auto& item, std::size_t index) -> pulseui::Node { return <row>; })`, keyed when `key` is set, `List(...)` when virtualized |
+| a binding inside the row starting with the item name (`item.title`) | the field of the row's element, through the one-way `Property::bind_once` (`.bind_text(item.title)`) |
+| an event inside the row | the model method called with `(item)`, `(index)` or `()` - whatever it accepts (`if constexpr (requires ...)`) |
+| `Tabs` (pages = children, prop `titles`) | `Tabs{ Tab("First", <page>), ... }` (`TypeInfo::child_title`) |
+| `Canvas` (event `draw`, bindable `redraw_on`) | `Canvas([&](Painter& p, const Rect& r) { m.draw(p, r); }).redraw_on(m.values)` |
+| `Component` (prop `form`, bindable `model`) | `VStack{Ui::Other::part(m)}` - the other form, its bindings on `m` or `m.<model>`; the header includes `ui_other.hpp` |
+| `Custom` (props `class`, `header`, `args`, `modifiers`) | `ClassName(args)<modifiers>` - a view class of the project; the header includes `header` |
+
+Views inside a list row and components are not exposed as pointers (they repeat or have their own
+class). `TypeInfo::init_new` fills a newly added view in the designer (a default row, two pages).
+Only containers save their children: the inner parts of a view (a `NumberField`'s text field) are its own.
 
 ## The JSON library
 

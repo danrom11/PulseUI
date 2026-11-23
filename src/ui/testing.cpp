@@ -29,6 +29,7 @@ ImageDiff compare(const Image& expected, const Image& actual, int tolerance) {
 }
 
 Harness::Harness(Window& window, Size size) : window_(window) {
+  Window::set_headless(true); // dialogs and other windows opened by the test stay off screen
   if (size.w <= 0 || size.h <= 0) size = window_.size();
   if (size.w <= 0 || size.h <= 0) size = {800, 600};
   window_.handle_resize(size);
@@ -87,6 +88,7 @@ Harness& Harness::click_at(Point p, MouseButton button) {
 }
 
 Harness& Harness::click(View& v, MouseButton button) {
+  layout();
   if (v.bounds().empty()) throw std::runtime_error("pulseui::testing: cannot click '" + v.id() + "': it has no size");
   return click_at(center(v), button);
 }
@@ -168,6 +170,23 @@ Harness& Harness::fill(std::string_view id, std::string_view text) {
   if (text.empty()) press("Backspace");
   else type(text);
   return *this;
+}
+
+bool Harness::drop_files(std::string_view id, const std::vector<std::string>& files) {
+  const Point p = center(view(id));
+  DragData d;
+  d.files = files;
+  window_.handle_drag(Window::DragPhase::Enter, p, d);
+  window_.handle_drag(Window::DragPhase::Over, p, d);
+  return window_.handle_drag(Window::DragPhase::Drop, p, d);
+}
+
+bool Harness::drop_text(std::string_view id, const std::string& text) {
+  const Point p = center(view(id));
+  DragData d;
+  d.text = text;
+  window_.handle_drag(Window::DragPhase::Enter, p, d);
+  return window_.handle_drag(Window::DragPhase::Drop, p, d);
 }
 
 Harness& Harness::run_for(std::chrono::milliseconds d) {

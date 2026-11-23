@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -60,6 +61,35 @@ struct Color {
     return {x.r + (y.r - x.r) * t, x.g + (y.g - x.g) * t, x.b + (y.b - x.b) * t, x.a + (y.a - x.a) * t};
   }
   constexpr float luminance() const { return 0.2126f * r + 0.7152f * g + 0.0722f * b; }
+
+  // HSV: hue in degrees [0, 360), saturation and value in [0, 1].
+  static Color hsv(float h, float s, float v, float alpha = 1.f) {
+    h = h - 360.f * static_cast<float>(static_cast<int>(h / 360.f));
+    if (h < 0) h += 360.f;
+    s = std::clamp(s, 0.f, 1.f);
+    v = std::clamp(v, 0.f, 1.f);
+    const float c = v * s, hp = h / 60.f;
+    const float x = c * (1 - std::abs(hp - 2.f * static_cast<float>(static_cast<int>(hp / 2.f)) - 1));
+    float r1 = 0, g1 = 0, b1 = 0;
+    if (hp < 1) { r1 = c; g1 = x; }
+    else if (hp < 2) { r1 = x; g1 = c; }
+    else if (hp < 3) { g1 = c; b1 = x; }
+    else if (hp < 4) { g1 = x; b1 = c; }
+    else if (hp < 5) { r1 = x; b1 = c; }
+    else { r1 = c; b1 = x; }
+    const float m = v - c;
+    return {r1 + m, g1 + m, b1 + m, alpha};
+  }
+  void to_hsv(float& h, float& s, float& v) const {
+    const float mx = std::max({r, g, b}), mn = std::min({r, g, b}), d = mx - mn;
+    v = mx;
+    s = mx > 0 ? d / mx : 0;
+    if (d <= 0) h = 0;
+    else if (mx == r) h = 60.f * ((g - b) / d);
+    else if (mx == g) h = 60.f * ((b - r) / d + 2);
+    else h = 60.f * ((r - g) / d + 4);
+    if (h < 0) h += 360.f;
+  }
   constexpr bool operator==(const Color&) const = default;
 };
 

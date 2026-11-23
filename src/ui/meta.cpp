@@ -1,4 +1,7 @@
+#include <pulseui/ui/form.hpp>
+#include <pulseui/ui/inputs.hpp>
 #include <pulseui/ui/meta.hpp>
+#include <pulseui/ui/theme.hpp>
 #include <pulseui/ui/widgets.hpp>
 
 #include <cmath>
@@ -220,29 +223,29 @@ std::vector<TypeInfo>& registry() {
 
     // ── layout ──
     {
-      TypeInfo t{"VStack", "Layout", "⇕", true, [] { return std::make_unique<VStack>(); }, [](View&) { return std::string("VStack"); }, {}, {}, {}};
+      TypeInfo t{"VStack", "Layout", "⇕", true, [] { return std::make_unique<VStack>(); }, [](View&) { return std::string("VStack"); }, {}, {}, {}, {}, {}};
       add_stack_props<VStack>(t);
       r.push_back(std::move(t));
     }
     {
-      TypeInfo t{"HStack", "Layout", "⇔", true, [] { return std::make_unique<HStack>(); }, [](View&) { return std::string("HStack"); }, {}, {}, {}};
+      TypeInfo t{"HStack", "Layout", "⇔", true, [] { return std::make_unique<HStack>(); }, [](View&) { return std::string("HStack"); }, {}, {}, {}, {}, {}};
       add_stack_props<HStack>(t);
       r.push_back(std::move(t));
     }
     {
-      TypeInfo t{"Panel", "Layout", "▢", true, [] { return std::make_unique<Panel>(); }, [](View&) { return std::string("Panel"); }, {}, {}, {}};
+      TypeInfo t{"Panel", "Layout", "▢", true, [] { return std::make_unique<Panel>(); }, [](View&) { return std::string("Panel"); }, {}, {}, {}, {}, {}};
       add_stack_props<Panel>(t);
       r.push_back(std::move(t));
     }
-    r.push_back({"Layer", "Layout", "◫", true, [] { return std::make_unique<Layer>(); }, [](View&) { return std::string("Layer"); }, {}, {}, {}});
-    r.push_back({"Scroll", "Layout", "↕", true, [] { return std::make_unique<Scroll>(); }, [](View&) { return std::string("Scroll"); }, {}, {}, {}});
-    r.push_back({"Spacer", "Layout", "↔", false, [] { return std::make_unique<Spacer>(); }, [](View&) { return std::string("Spacer()"); }, {}, {}, {}});
+    r.push_back({"Layer", "Layout", "◫", true, [] { return std::make_unique<Layer>(); }, [](View&) { return std::string("Layer"); }, {}, {}, {}, {}, {}});
+    r.push_back({"Scroll", "Layout", "↕", true, [] { return std::make_unique<Scroll>(); }, [](View&) { return std::string("Scroll"); }, {}, {}, {}, {}, {}});
+    r.push_back({"Spacer", "Layout", "↔", false, [] { return std::make_unique<Spacer>(); }, [](View&) { return std::string("Spacer()"); }, {}, {}, {}, {}, {}});
     {
       TypeInfo t{"Divider", "Layout", "—", false, [] { return std::make_unique<Divider>(); },
                  [](View& v) {
                    return static_cast<Divider&>(v).orientation() == Orientation::Vertical ? std::string("Divider(Orientation::Vertical)")
                                                                                           : std::string("Divider()");
-                 }, {}, {}, {}};
+                 }, {}, {}, {}, {}, {}};
       t.props.push_back(enumeration<Divider>("orientation", "Divider", {"Horizontal", "Vertical"},
                                              [](Divider& d) { return static_cast<int>(d.orientation()); },
                                              [](Divider& d, int i) { d.set_orientation(static_cast<Orientation>(i)); }));
@@ -252,7 +255,7 @@ std::vector<TypeInfo>& registry() {
     // ── display ──
     {
       TypeInfo t{"Text", "Display", "T", false, [] { return std::make_unique<Text>("Text"); },
-                 [](View& v) { return "Text(" + quote(static_cast<Text&>(v).text()) + ")"; }, {}, {}, {}};
+                 [](View& v) { return "Text(" + quote(static_cast<Text&>(v).text()) + ")"; }, {}, {}, {}, {}, {}};
       t.props.push_back(string<Text>("text", "Text", [](Text& x) { return x.text(); }, [](Text& x, const std::string& s) { x.set_text(s); }));
       t.props.push_back(number<Text>("font_size", "Text", [](Text& x) { return static_cast<double>(x.font_size_value()); },
                                      [](Text& x, double d) { x.set_font_size(static_cast<float>(d)); }, "font_size", 0, 200));
@@ -277,14 +280,14 @@ std::vector<TypeInfo>& registry() {
     }
     {
       TypeInfo t{"Image", "Display", "▣", false, [] { return std::make_unique<ImageView>(); },
-                 [](View& v) { return "ImageView(std::string(" + quote(static_cast<ImageView&>(v).source()) + "))"; }, {}, {}, {}};
+                 [](View& v) { return "ImageView(std::string(" + quote(static_cast<ImageView&>(v).source()) + "))"; }, {}, {}, {}, {}, {}};
       t.props.push_back(string<ImageView>("source", "Image", [](ImageView& x) { return x.source(); },
                                           [](ImageView& x, const std::string& s) { x.set_source(s); }));
       r.push_back(std::move(t));
     }
     {
       TypeInfo t{"ProgressBar", "Display", "▬", false, [] { return std::make_unique<ProgressBar>(Bind<double>(0.4)); },
-                 [](View& v) { return "ProgressBar(" + num(static_cast<ProgressBar&>(v).value()) + ")"; }, {}, {}, {}};
+                 [](View& v) { return "ProgressBar(" + num(static_cast<ProgressBar&>(v).value()) + ")"; }, {}, {}, {}, {}, {}};
       t.props.push_back(number<ProgressBar>("value", "Value", [](ProgressBar& x) { return x.value(); },
                                             [](ProgressBar& x, double d) { x.set_value(d); }, {}, 0, 1));
       r.push_back(std::move(t));
@@ -293,7 +296,7 @@ std::vector<TypeInfo>& registry() {
     // ── controls ──
     {
       TypeInfo t{"Button", "Controls", "▭", false, [] { return std::make_unique<Button>("Button"); },
-                 [](View& v) { return "Button(" + quote(static_cast<Button&>(v).label()) + ")"; }, {}, {}, {}};
+                 [](View& v) { return "Button(" + quote(static_cast<Button&>(v).label()) + ")"; }, {}, {}, {}, {}, {}};
       t.props.push_back(string<Button>("label", "Button", [](Button& x) { return x.label(); }, [](Button& x, const std::string& s) { x.set_label(s); }));
       t.props.push_back(enumeration<Button>("kind", "Button", {"Normal", "Primary", "Flat", "Danger"},
                                             [](Button& x) { return static_cast<int>(x.kind_value()); },
@@ -306,7 +309,7 @@ std::vector<TypeInfo>& registry() {
     }
     {
       TypeInfo t{"TextField", "Controls", "⌨", false, [] { return std::make_unique<TextField>(); },
-                 [](View&) { return std::string("TextField()"); }, {}, {}, {}};
+                 [](View&) { return std::string("TextField()"); }, {}, {}, {}, {}, {}};
       t.props.push_back(string<TextField>("placeholder", "TextField", [](TextField& x) { return x.placeholder_value(); },
                                           [](TextField& x, const std::string& s) { x.set_placeholder(s); }, "placeholder"));
       t.props.push_back(string<TextField>("text", "TextField", [](TextField& x) { return x.text(); },
@@ -318,7 +321,7 @@ std::vector<TypeInfo>& registry() {
                  [](View& v) {
                    auto& c = static_cast<Checkbox&>(v);
                    return "Checkbox(" + quote(c.label()) + (c.checked() ? ", true)" : ")");
-                 }, {}, {}, {}};
+                 }, {}, {}, {}, {}, {}};
       t.props.push_back(string<Checkbox>("label", "Checkbox", [](Checkbox& x) { return x.label(); }, [](Checkbox& x, const std::string& s) { x.set_label(s); }));
       t.props.push_back(boolean<Checkbox>("checked", "Checkbox", [](Checkbox& x) { return x.checked(); }, [](Checkbox& x, bool b) { x.set_checked(b, false); }));
       r.push_back(std::move(t));
@@ -328,7 +331,7 @@ std::vector<TypeInfo>& registry() {
                  [](View& v) {
                    auto& c = static_cast<Toggle&>(v);
                    return "Toggle(" + quote(c.label()) + (c.checked() ? ", true)" : ")");
-                 }, {}, {}, {}};
+                 }, {}, {}, {}, {}, {}};
       t.props.push_back(string<Toggle>("label", "Toggle", [](Toggle& x) { return x.label(); }, [](Toggle& x, const std::string& s) { x.set_label(s); }));
       t.props.push_back(boolean<Toggle>("checked", "Toggle", [](Toggle& x) { return x.checked(); }, [](Toggle& x, bool b) { x.set_checked(b, false); }));
       r.push_back(std::move(t));
@@ -338,7 +341,7 @@ std::vector<TypeInfo>& registry() {
                  [](View& v) {
                    auto& s = static_cast<Slider&>(v);
                    return "Slider(" + num(s.value()) + ", " + num(s.min()) + ", " + num(s.max()) + ")";
-                 }, {}, {}, {}};
+                 }, {}, {}, {}, {}, {}};
       t.props.push_back(number<Slider>("value", "Slider", [](Slider& x) { return x.value(); }, [](Slider& x, double d) { x.set_value(d, false); }));
       t.props.push_back(number<Slider>("min", "Slider", [](Slider& x) { return x.min(); }, [](Slider& x, double d) { x.set_range(d, x.max()); }));
       t.props.push_back(number<Slider>("max", "Slider", [](Slider& x) { return x.max(); }, [](Slider& x, double d) { x.set_range(x.min(), d); }));
@@ -352,13 +355,222 @@ std::vector<TypeInfo>& registry() {
                    std::string o = "Select({";
                    for (std::size_t i = 0; i < s.options().size(); ++i) o += (i ? ", " : "") + quote(s.options()[i]);
                    return o + "}, " + std::to_string(s.index()) + ")";
-                 }, {}, {}, {}};
+                 }, {}, {}, {}, {}, {}};
       t.props.push_back(string<Select>("options", "Select", [](Select& x) { return join_csv(x.options()); },
                                        [](Select& x, const std::string& s) { x.set_options(split_csv(s)); }));
       t.props.push_back(number<Select>("index", "Select", [](Select& x) { return static_cast<double>(x.index()); },
                                        [](Select& x, double d) { x.set_index(static_cast<int>(d), false); }, {}, 0, 1000));
       r.push_back(std::move(t));
     }
+    // ── more layout: grids, wrapping rows, tabs, lists ──
+    {
+      TypeInfo t{"Grid", "Layout", "\xE2\x96\xA6", true, [] { return std::make_unique<Grid>(); }, [](View&) { return std::string("Grid"); }, {}, {}, {}, {}, {}};
+      t.props.push_back(number<Grid>("columns", "Grid", [](Grid& g) { return static_cast<double>(g.column_count()); },
+                                     [](Grid& g, double d) { g.set_columns(std::vector<Track>(static_cast<std::size_t>(std::max(1.0, d)), Track::fr(1))); },
+                                     "columns", 1, 24));
+      t.props.push_back(number<Grid>("spacing", "Grid", [](Grid& g) { return static_cast<double>(g.row_gap()); },
+                                     [](Grid& g, double d) { g.set_gaps(static_cast<float>(d), static_cast<float>(d)); }, "spacing", 0, 200));
+      t.init_new = [](View& v) {
+        static_cast<Grid&>(v).set_columns({Track::fr(1), Track::fr(1)});
+        for (const char* s : {"Cell 1", "Cell 2", "Cell 3", "Cell 4"}) v.add(Text(s));
+      };
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"Wrap", "Layout", "\xE2\x86\xA9", true, [] { return std::make_unique<Wrap>(); }, [](View&) { return std::string("Wrap"); }, {}, {}, {}, {}, {}};
+      t.props.push_back(number<Wrap>("spacing", "Wrap", [](Wrap& w) { return static_cast<double>(w.spacing_value()); },
+                                     [](Wrap& w, double d) { w.set_spacing(static_cast<float>(d)); }, "spacing", 0, 200));
+      t.init_new = [](View& v) {
+        for (const char* s : {"one", "two", "three"}) v.add(Button(s));
+      };
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"Tabs", "Layout", "\xE2\x8A\x9F", true, [] { return std::make_unique<Tabs>(); }, [](View&) { return std::string("Tabs"); }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<Tabs>("titles", "Tabs",
+                                     [](Tabs& x) {
+                                       std::vector<std::string> ts;
+                                       for (std::size_t i = 0; i < x.page_count(); ++i) ts.push_back(x.title_of(i));
+                                       return join_csv(ts);
+                                     },
+                                     [](Tabs& x, const std::string& s) { x.set_titles(split_csv(s)); }));
+      t.props.push_back(number<Tabs>("current", "Tabs", [](Tabs& x) { return static_cast<double>(x.current()); },
+                                     [](Tabs& x, double d) { x.set_current(static_cast<int>(d), false); }, {}, 0, 100));
+      t.child_title = [](View& v, std::size_t i) { return static_cast<Tabs&>(v).title_of(i); };
+      t.init_new = [](View& v) {
+        auto& tabs = static_cast<Tabs&>(v);
+        tabs.add(VStack{Text("First page")}.padding(12));
+        tabs.add(VStack{Text("Second page")}.padding(12));
+        tabs.set_titles({"First", "Second"});
+        tabs.height(160);
+      };
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"ForEach", "Layout", "\xE2\x98\xB0", true, [] { return std::make_unique<ForEachTemplate>(); },
+                 [](View&) { return std::string("ForEach"); }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<ForEachTemplate>("items", "List", [](ForEachTemplate&) { return std::string(); },
+                                                [](ForEachTemplate&, const std::string&) {}));
+      t.props.push_back(string<ForEachTemplate>("item", "List", [](ForEachTemplate& f) { return f.item_name; },
+                                                [](ForEachTemplate& f, const std::string& s) { f.item_name = s.empty() ? "item" : s; }));
+      t.props.push_back(string<ForEachTemplate>("key", "List", [](ForEachTemplate& f) { return f.key; },
+                                                [](ForEachTemplate& f, const std::string& s) { f.key = s; }));
+      t.props.push_back(boolean<ForEachTemplate>("virtualized", "List", [](ForEachTemplate& f) { return f.virtualized; },
+                                                 [](ForEachTemplate& f, bool b) { f.virtualized = b; f.invalidate_layout(); }));
+      t.props.push_back(number<ForEachTemplate>("row_height", "List", [](ForEachTemplate& f) { return static_cast<double>(f.row_height); },
+                                                [](ForEachTemplate& f, double d) { f.row_height = static_cast<float>(d); }, {}, 8, 400));
+      t.props.push_back(number<ForEachTemplate>("spacing", "List", [](ForEachTemplate& f) { return static_cast<double>(f.spacing); },
+                                                [](ForEachTemplate& f, double d) { f.spacing = static_cast<float>(d); f.invalidate_layout(); }, {}, 0, 200));
+      t.props.push_back(boolean<ForEachTemplate>("horizontal", "List", [](ForEachTemplate& f) { return f.horizontal; },
+                                                 [](ForEachTemplate& f, bool b) { f.horizontal = b; f.invalidate_layout(); }));
+      t.props.push_back(number<ForEachTemplate>("preview_rows", "List", [](ForEachTemplate& f) { return static_cast<double>(f.preview_rows); },
+                                                [](ForEachTemplate& f, double d) { f.preview_rows = static_cast<int>(d); f.invalidate_layout(); }, {}, 1, 20));
+      t.props.back().group = "Designer";
+      t.init_new = [](View& v) {
+        HStack row{Checkbox(""), Text("Item").flex()};
+        row.spacing(8).align_items(Alignment::Center);
+        v.add(std::move(row));
+      };
+      r.push_back(std::move(t));
+    }
+
+    // ── more display ──
+    {
+      TypeInfo t{"Icon", "Display", "\xE2\x98\x85", false, [] { return std::make_unique<Icon>(std::string("\xE2\x98\x85")); },
+                 [](View& v) { return "Icon(std::string(" + quote(static_cast<Icon&>(v).source()) + "))"; }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<Icon>("source", "Icon", [](Icon& x) { return x.source(); }, [](Icon& x, const std::string& s) { x.set_source(s); }));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"Canvas", "Display", "\xE2\x9C\x8E", false,
+                 [] {
+                   auto c = std::make_unique<Canvas>([](Painter& p, const Rect& r) {
+                     // a placeholder: the real drawing comes from the bound draw(...) method
+                     const Theme& th_ = th();
+                     p.stroke_rect(r.inset(0.5f), th_.border, 1, th_.radius_small);
+                     p.line({r.x, r.y}, {r.right(), r.bottom()}, th_.border.with_alpha(0.5f), 1);
+                     p.line({r.right(), r.y}, {r.x, r.bottom()}, th_.border.with_alpha(0.5f), 1);
+                     p.text(r, "Canvas", th_.font_small, th_.text_dim, Align::Center);
+                   });
+                   c->height(120);
+                   return c;
+                 },
+                 [](View&) { return std::string("Canvas"); }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<Canvas>("redraw_on", "Canvas", [](Canvas&) { return std::string(); }, [](Canvas&, const std::string&) {}));
+      r.push_back(std::move(t));
+    }
+
+    // ── more controls ──
+    {
+      TypeInfo t{"Segmented", "Controls", "\xE2\x96\xAD\xE2\x96\xAD", false,
+                 [] { return std::make_unique<Segmented>(Bind<std::vector<std::string>>(std::vector<std::string>{"Day", "Week", "Month"})); },
+                 [](View& v) {
+                   auto& s = static_cast<Segmented&>(v);
+                   std::string o = "Segmented({";
+                   for (std::size_t i = 0; i < s.options().size(); ++i) o += (i ? ", " : "") + quote(s.options()[i]);
+                   return o + "}, " + std::to_string(s.index()) + ")";
+                 }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<Segmented>("options", "Segmented", [](Segmented& x) { return join_csv(x.options()); },
+                                          [](Segmented& x, const std::string& s) { x.set_options(split_csv(s)); }));
+      t.props.push_back(number<Segmented>("index", "Segmented", [](Segmented& x) { return static_cast<double>(x.index()); },
+                                          [](Segmented& x, double d) { x.set_index(static_cast<int>(d), false); }, {}, 0, 100));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"RadioGroup", "Controls", "\xE2\x97\x89", false,
+                 [] { return std::make_unique<RadioGroup>(Bind<std::vector<std::string>>(std::vector<std::string>{"Small", "Medium", "Large"})); },
+                 [](View& v) {
+                   auto& s = static_cast<RadioGroup&>(v);
+                   std::string o = "RadioGroup({";
+                   for (std::size_t i = 0; i < s.options().size(); ++i) o += (i ? ", " : "") + quote(s.options()[i]);
+                   return o + "}, " + std::to_string(s.index()) + ")";
+                 }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<RadioGroup>("options", "RadioGroup", [](RadioGroup& x) { return join_csv(x.options()); },
+                                           [](RadioGroup& x, const std::string& s) { x.set_options(split_csv(s)); }));
+      t.props.push_back(number<RadioGroup>("index", "RadioGroup", [](RadioGroup& x) { return static_cast<double>(x.index()); },
+                                           [](RadioGroup& x, double d) { x.set_index(static_cast<int>(d), false); }, {}, 0, 100));
+      t.props.push_back(boolean<RadioGroup>("horizontal", "RadioGroup", [](RadioGroup& x) { return x.is_horizontal(); },
+                                            [](RadioGroup& x, bool b) { x.set_horizontal(b); }, "horizontal"));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"TextArea", "Controls", "\xC2\xB6", false, [] { return std::make_unique<TextArea>(); },
+                 [](View& v) {
+                   auto& a = static_cast<TextArea&>(v);
+                   return a.text().empty() ? std::string("TextArea()") : "TextArea(std::string(" + quote(a.text()) + "))";
+                 }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<TextArea>("placeholder", "TextArea", [](TextArea& x) { return x.placeholder_value(); },
+                                         [](TextArea& x, const std::string& s) { x.set_placeholder(s); }, "placeholder"));
+      t.props.push_back(string<TextArea>("text", "TextArea", [](TextArea& x) { return x.text(); }, [](TextArea& x, const std::string& s) { x.set_text(s); }));
+      t.props.push_back(boolean<TextArea>("read_only", "TextArea", [](TextArea& x) { return x.is_read_only(); },
+                                          [](TextArea& x, bool b) { x.read_only(b); }, "read_only"));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"NumberField", "Controls", "#", false, [] { return std::make_unique<NumberField>(Bind<double>(0.0), 0, 100, 1); },
+                 [](View& v) {
+                   auto& n = static_cast<NumberField&>(v);
+                   return "NumberField(" + num(n.value()) + ", " + num(n.min_value()) + ", " + num(n.max_value()) + ", " + num(n.step_value()) + ")";
+                 }, {}, {}, {}, {}, {}};
+      t.props.push_back(number<NumberField>("value", "NumberField", [](NumberField& x) { return x.value(); }, [](NumberField& x, double d) { x.set_value(d, false); }));
+      t.props.push_back(number<NumberField>("min", "NumberField", [](NumberField& x) { return x.min_value(); },
+                                            [](NumberField& x, double d) { x.set_range(d, x.max_value()); }));
+      t.props.push_back(number<NumberField>("max", "NumberField", [](NumberField& x) { return x.max_value(); },
+                                            [](NumberField& x, double d) { x.set_range(x.min_value(), d); }));
+      t.props.push_back(number<NumberField>("step", "NumberField", [](NumberField& x) { return x.step_value(); },
+                                            [](NumberField& x, double d) { x.set_step(d); }));
+      t.props.push_back(number<NumberField>("decimals", "NumberField", [](NumberField& x) { return static_cast<double>(x.decimals_value()); },
+                                            [](NumberField& x, double d) { x.set_decimals(static_cast<int>(d)); }, "decimals", 0, 10));
+      t.props.push_back(string<NumberField>("suffix", "NumberField", [](NumberField& x) { return x.suffix_value(); },
+                                            [](NumberField& x, const std::string& s) { x.set_suffix(s); }, "suffix"));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"DatePicker", "Controls", "\xF0\x9F\x93\x85", false, [] { return std::make_unique<DatePicker>(Date::today()); },
+                 [](View& v) {
+                   const Date d = static_cast<DatePicker&>(v).date();
+                   return "DatePicker(pulseui::Date{" + std::to_string(d.year) + ", " + std::to_string(d.month) + ", " + std::to_string(d.day) + "})";
+                 }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<DatePicker>("date", "DatePicker", [](DatePicker& x) { return x.date().iso(); },
+                                           [](DatePicker& x, const std::string& s) {
+                                             if (auto d = Date::parse(s)) x.set_date(*d, false);
+                                           }));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"ColorPicker", "Controls", "\xE2\x97\x95", false, [] { return std::make_unique<ColorPicker>(Color::hex(0x3B82F6)); },
+                 [](View& v) { return "ColorPicker(" + color_code(static_cast<ColorPicker&>(v).color()) + ")"; }, {}, {}, {}, {}, {}};
+      t.props.push_back(color<ColorPicker>("color", "ColorPicker", [](ColorPicker& x) { return x.color(); },
+                                           [](ColorPicker& x, Color c) { x.set_color(c, false); }));
+      t.props.push_back(boolean<ColorPicker>("alpha", "ColorPicker", [](ColorPicker& x) { return x.alpha_value(); },
+                                             [](ColorPicker& x, bool b) { x.set_alpha(b); }, "alpha"));
+      r.push_back(std::move(t));
+    }
+
+    // ── project parts: other forms and the project's own view classes ──
+    {
+      TypeInfo t{"Component", "Project", "\xE2\x96\xA3", false, [] { return std::make_unique<FormComponent>(); },
+                 [](View& v) { return "Ui::" + static_cast<FormComponent&>(v).form() + "::part(m)"; }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<FormComponent>("form", "Component", [](FormComponent& c) { return c.form(); },
+                                              [](FormComponent& c, const std::string& s) { c.set_form(s); }));
+      t.props.push_back(string<FormComponent>("model", "Component", [](FormComponent&) { return std::string(); },
+                                              [](FormComponent&, const std::string&) {}));
+      r.push_back(std::move(t));
+    }
+    {
+      TypeInfo t{"Custom", "Project", "\xE2\x97\x87", false, [] { return std::make_unique<CustomView>(); },
+                 [](View& v) { return static_cast<CustomView&>(v).class_name + "()"; }, {}, {}, {}, {}, {}};
+      t.props.push_back(string<CustomView>("class", "Custom view", [](CustomView& c) { return c.class_name; },
+                                           [](CustomView& c, const std::string& s) { c.class_name = s; c.invalidate_layout(); }));
+      t.props.push_back(string<CustomView>("header", "Custom view", [](CustomView& c) { return c.header; },
+                                           [](CustomView& c, const std::string& s) { c.header = s; }));
+      t.props.push_back(string<CustomView>("args", "Custom view", [](CustomView& c) { return c.args; },
+                                           [](CustomView& c, const std::string& s) { c.args = s; }));
+      t.props.push_back(string<CustomView>("modifiers", "Custom view", [](CustomView& c) { return c.modifiers; },
+                                           [](CustomView& c, const std::string& s) { c.modifiers = s; }));
+      r.push_back(std::move(t));
+    }
+
     // ── bindings and events available in forms ──
     auto type = [&r](const char* name) -> TypeInfo& {
       for (auto& t : r)
@@ -385,6 +597,43 @@ std::vector<TypeInfo>& registry() {
     type("Select").events = {{"change", "on_change", "int"}};
     make_bindable(type("ProgressBar").props, "value", "bind_value", "double 0..1");
     type("Image").cpp_class = "ImageView";
+    // the new types
+    make_bindable(type("ForEach").props, "items", "", "std::vector<T> (property, computed or stream)");
+    make_bindable(type("Component").props, "model", "", "a member object the form's bindings refer to (unbound: this form's class)");
+    make_bindable(type("Canvas").props, "redraw_on", "redraw_on", "any property or stream (redraws when it changes)");
+    type("Canvas").events = {{"draw", "", "pulseui::Painter&, const pulseui::Rect&"}};
+    make_bindable(type("Tabs").props, "current", "selected", "pulse::property<int> (two-way)");
+    make_bindable(type("Segmented").props, "index", "model", "pulse::property<int> (two-way)");
+    make_bindable(type("Segmented").props, "options", "bind_options", "std::vector<std::string>");
+    type("Segmented").events = {{"change", "on_change", "int"}};
+    make_bindable(type("RadioGroup").props, "index", "model", "pulse::property<int> (two-way)");
+    make_bindable(type("RadioGroup").props, "options", "bind_options", "std::vector<std::string>");
+    type("RadioGroup").events = {{"change", "on_change", "int"}};
+    make_bindable(type("TextArea").props, "text", "model", "pulse::property<std::string> (two-way)");
+    type("TextArea").events = {{"change", "on_change", "const std::string&"}};
+    make_bindable(type("NumberField").props, "value", "model", "pulse::property<double> or <int> (two-way)");
+    type("NumberField").events = {{"change", "on_change", "double"}};
+    make_bindable(type("DatePicker").props, "date", "model", "pulse::property<pulseui::Date> (two-way)");
+    type("DatePicker").events = {{"change", "on_change", "pulseui::Date"}};
+    make_bindable(type("ColorPicker").props, "color", "model", "pulse::property<Color> (two-way)");
+    type("ColorPicker").events = {{"change", "on_change", "pulseui::Color"}};
+    // one-way forms for list rows (an item field cannot be written back)
+    auto once = [&](const char* tn, const char* prop, const char* modifier) {
+      for (auto& p : type(tn).props)
+        if (p.name == prop) p.bind_once = binder(modifier);
+    };
+    once("TextField", "text", "bind_text");
+    once("Checkbox", "checked", "bind_checked");
+    once("Toggle", "checked", "bind_checked");
+    once("Slider", "value", "bind_value");
+    once("Select", "index", "bind_index");
+    once("Segmented", "index", "bind_index");
+    once("RadioGroup", "index", "bind_index");
+    once("TextArea", "text", "bind_text");
+    once("NumberField", "value", "bind_value");
+    once("DatePicker", "date", "bind_date");
+    once("ColorPicker", "color", "bind_color");
+    once("Tabs", "current", "selected");
     return r;
   }();
   return reg;

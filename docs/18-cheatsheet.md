@@ -62,7 +62,8 @@ Slider(model, min, max).step(1)   ProgressBar(fraction)
 Select({"A", "B"}, index_model).bind_options(stream)   Segmented({"A", "B"}, index_model)
 ImageView(std::string("a.png"))   ImageView(image_stream)
 Canvas([](Painter& p, const Rect& r) { ... }).redraw_on(src)
-CodeEditor(model).highlighter(h).completion(c).diagnostics(d).read_only().line_numbers(false)
+CodeEditor(model).highlighter(h).completion(c).hover(h).auto_close().line_comment("//").diagnostics(d)
+ed->set_search("x"); ed->find_next(); ed->replace_all("y"); ed->definition_requested.connect(fn);
 ```
 
 ## Modifiers on every view
@@ -118,6 +119,38 @@ win.get<TextField>("email");          // strict lookup (throws); win.find<T>() r
 auto f = load_form("x.pform", &err);  Window w(f->title, f->width, f->height);  w.content(std::move(f->root));
 save_form(path, title, w, h, root);   generate_cpp(root, "make_x");   generate_cpp_expression(root);
 meta::register_type(info);            meta::create("Button");        meta::set(view, "label", std::string("OK"));
+```
+
+## Menus, dialogs, toasts
+
+```cpp
+win.menu({Menu("&File", {Action("&Save", save).shortcut("Ctrl+S").enabled(dirty), Separator(),
+                          Menu("Recent", [&] { return recent(); })}),
+          Menu("&View", {Action("Wrap").checked(wrap)})});
+view.context_menu({Action("Copy", copy)});          win.popup_menu(items, point);
+dialogs::alert(&win, "Saved", "Done.");              if (dialogs::confirm(&win, "Delete?", "Sure?", "Delete")) ...
+auto name = dialogs::prompt(&win, "Rename", "Name:", old);   dialogs::message_async(&win, msg, [](auto a) { ... });
+other.show_modal(win);  other.run_modal(&win);       win.present(sheet);
+toast(win, "Saved", ToastKind::Success);
+```
+
+## Lists, collections, more widgets
+
+```cpp
+ForEach(todos, [](const Todo& t) { return t.id; }, row);        // keyed: rows keep focus and state
+ForEach(cards, card).wrap();   Grid{...}.columns({Track::automatic(), Track::fr(1)});   Wrap{...}.spacing(6);
+List(items, row).row_height(32).selected(sel);   Table(rows, {Column<T>{"Name", 200, fn}});   TreeView(tree);
+TextArea(notes).rows(6);  NumberField(qty, 0, 99);  RadioGroup({"A", "B"}, i);  DatePicker(date);  ColorPicker(color);
+Icon("icons/x.svg").size(16);  Button("Save").icon("save.svg");  TextField(city).suggestions(fn);
+```
+
+## Animation, drag and drop, accessibility
+
+```cpp
+view.animate();  view.animate(300ms, Easing::Spring);   Show(open, details).transition();
+ProgressBar(tween(progress, 400ms));                     anim::set_speed(0);  // tests
+view.on_drop_files([](auto& files) { ... }, {".png"});  view.on_drop_text(fn);  view.drag_source([] { return DragData{{path}, ""}; });
+Button("x").a11y_label("Close");  canvas.a11y_role(Role::Image);  deco.a11y_hidden();
 ```
 
 ## Testing

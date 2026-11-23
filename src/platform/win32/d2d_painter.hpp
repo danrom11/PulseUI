@@ -33,6 +33,7 @@ public:
   void polyline(const std::vector<Point>& pts, Color c, float width, bool closed) override;
   void fill_polygon(const std::vector<Point>& pts, Color c) override;
   void fill_gradient(const Rect& r, Color top, Color bottom, float radius) override;
+  void fill_path(const std::vector<std::vector<Point>>& contours, Color c, bool even_odd) override;
   void text(const Rect& r, std::string_view s, const Font& f, Color c, int align, bool wrap) override;
   void image(const Image& img, const Rect& dst, float opacity) override;
 

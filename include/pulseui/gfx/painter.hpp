@@ -33,6 +33,10 @@ public:
   virtual void polyline(const std::vector<Point>& pts, Color c, float width = 1, bool closed = false) = 0;
   virtual void fill_polygon(const std::vector<Point>& pts, Color c) = 0;
   virtual void fill_gradient(const Rect& r, Color top, Color bottom, float radius = 0) = 0;
+  // Several closed contours filled as one shape (holes via the fill rule).
+  virtual void fill_path(const std::vector<std::vector<Point>>& contours, Color c, bool even_odd = false) {
+    for (auto& ct : contours) fill_polygon(ct, c); // fallback without holes
+  }
 
   // text (single line unless `wrap`; elided with "…" if it does not fit)
   virtual void text(const Rect& r, std::string_view s, const Font& f, Color c,

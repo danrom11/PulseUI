@@ -19,6 +19,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <pulseui/core/geometry.hpp>
 #include <pulseui/gfx/image.hpp>
@@ -70,6 +71,10 @@ public:
   Harness& drag(std::string_view id, Point delta, int steps = 8);   // press at the center, move by delta, release
   Harness& drag(Point from, Point to, int steps = 8);
   Harness& scroll(std::string_view id, float lines);               // positive = down
+  // Drag files (from "another application") over a view and drop them there.
+  // Returns whether they were taken.
+  bool drop_files(std::string_view id, const std::vector<std::string>& files);
+  bool drop_text(std::string_view id, const std::string& text);
 
   // ── keyboard ──
   Harness& focus(std::string_view id);

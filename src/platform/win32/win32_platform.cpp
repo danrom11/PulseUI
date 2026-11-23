@@ -130,7 +130,7 @@ void init() {
   if (g_main_thread) return;
   g_main_thread = GetCurrentThreadId();
   enable_dpi_awareness();
-  CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+  OleInitialize(nullptr); // COM (single-threaded apartment) + OLE drag and drop
 
   auto& f = factories();
   D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory),
@@ -159,6 +159,22 @@ int run() {
   drain_posts();
   return static_cast<int>(msg.wParam);
 }
+
+void run_modal_loop(const std::function<bool()>& done) {
+  MSG msg{};
+  while (!done()) {
+    const BOOL r = GetMessageW(&msg, nullptr, 0, 0);
+    if (r <= 0) {
+      if (r == 0) PostQuitMessage(static_cast<int>(msg.wParam)); // leave the quit for the main loop
+      return;
+    }
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+}
+
+std::optional<dialogs::Answer> native_message(NativeWindow*, const dialogs::Message&) { return std::nullopt; }
+bool native_message_async(NativeWindow*, const dialogs::Message&, std::function<void(dialogs::Answer)>) { return false; }
 
 void process_events(int timeout_ms) {
   const ULONGLONG end = GetTickCount64() + static_cast<ULONGLONG>(std::max(0, timeout_ms));
@@ -190,6 +206,10 @@ void post(std::function<void()> fn) {
   }
   if (g_msg_hwnd) PostMessageW(g_msg_hwnd, WM_PULSE_POST, 0, 0);
 }
+
+// Windows: the menu bar is drawn by PulseUI so it follows the theme (a native
+// Win32 menu bar is always light).
+bool set_native_menu(NativeWindow*, const MenuItems&) { return false; }
 
 bool is_main_thread() { return GetCurrentThreadId() == g_main_thread; }
 

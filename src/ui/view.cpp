@@ -2,6 +2,7 @@
 #include <pulseui/ui/window.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <stdexcept>
 #if defined(__GNUG__)
@@ -56,8 +57,61 @@ View::View(View&& o) noexcept
       enabled_(o.enabled_),
       focusable_(o.focusable_),
       hover_repaint_(o.hover_repaint_),
-      annotations_(std::move(o.annotations_)) {
+      annotations_(std::move(o.annotations_)),
+      extras_(std::move(o.extras_)) {
   for (auto& c : children_) c->parent_ = this;
+}
+
+namespace {
+std::string lower(std::string s) {
+  for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+std::vector<std::string> matching_files(const ViewExtras& x, const std::vector<std::string>& files) {
+  if (x.drop_extensions.empty()) return files;
+  std::vector<std::string> out;
+  for (auto& f : files) {
+    const std::string lf = lower(f);
+    for (auto& ext : x.drop_extensions) {
+      const std::string le = lower(ext);
+      if (lf.size() >= le.size() && lf.compare(lf.size() - le.size(), le.size(), le) == 0) {
+        out.push_back(f);
+        break;
+      }
+    }
+  }
+  return out;
+}
+} // namespace
+
+bool View::accepts_drop(const DragData& d) const {
+  if (!extras_) return false;
+  if (!d.files.empty() && extras_->on_drop_files && !matching_files(*extras_, d.files).empty()) return true;
+  if (!d.text.empty() && extras_->on_drop_text) return true;
+  return false;
+}
+
+bool View::deliver_drop(const DragData& d) {
+  if (!extras_) return false;
+  if (!d.files.empty() && extras_->on_drop_files) {
+    auto files = matching_files(*extras_, d.files);
+    if (!files.empty()) {
+      auto fn = extras_->on_drop_files;
+      fn(files);
+      return true;
+    }
+  }
+  if (!d.text.empty() && extras_->on_drop_text) {
+    auto fn = extras_->on_drop_text;
+    fn(d.text);
+    return true;
+  }
+  return false;
+}
+
+ViewExtras& View::extras() {
+  if (!extras_) extras_ = std::make_unique<ViewExtras>();
+  return *extras_;
 }
 
 View::~View() {
@@ -114,6 +168,27 @@ void View::move_child(View* child, std::size_t new_index) {
   invalidate_layout();
 }
 
+void View::reorder(const std::vector<View*>& order) {
+  std::vector<std::unique_ptr<View>> out;
+  out.reserve(children_.size());
+  for (View* v : order)
+    for (auto& c : children_)
+      if (c.get() == v) {
+        out.push_back(std::move(c));
+        break;
+      }
+  for (auto& c : children_)
+    if (c) out.push_back(std::move(c));
+  children_ = std::move(out);
+  invalidate_layout();
+}
+
+bool View::contains(const View* v) const {
+  for (; v; v = v->parent_)
+    if (v == this) return true;
+  return false;
+}
+
 int View::index_of(const View* child) const {
   for (std::size_t i = 0; i < children_.size(); ++i)
     if (children_[i].get() == child) return static_cast<int>(i);
@@ -162,7 +237,74 @@ Point View::to_window(Point local) const {
   return p;
 }
 
-void View::set_frame(const Rect& r) { frame_ = r; }
+void View::set_frame(const Rect& r) {
+  ViewExtras* x = extras_.get();
+  if (x && x->transition && window_ && x->frame_valid && visible_ && anim::speed() > 0) {
+    if (r == x->frame_target) return; // already on its way there
+    x->frame_target = r;
+    const Rect from = frame_;
+    if (from == r) {
+      x->frame_anim.reset();
+      return;
+    }
+    std::weak_ptr<bool> alive = alive_;
+    x->frame_anim = anim::run(*x->transition, [this, alive, from, r](float t) {
+      if (alive.expired()) return;
+      frame_ = anim::lerp(from, r, t);
+      layout(); // children follow the size in flight
+      if (parent_) parent_->invalidate();
+      else invalidate();
+    });
+    return;
+  }
+  frame_ = r;
+  if (x) {
+    x->frame_target = r;
+    x->frame_valid = window_ != nullptr && r.w > 0;
+    x->frame_anim.reset();
+  }
+}
+
+namespace {
+template <class T, class Apply>
+void animate_value(View& v, ViewExtras* x, const std::shared_ptr<bool>& alive_token, T from, T to,
+                   pulse::subscription ViewExtras::*slot, Apply apply) {
+  if (!x || !x->transition || !v.mounted() || anim::speed() <= 0 || from == to) {
+    if (x) (x->*slot).reset();
+    apply(to);
+    return;
+  }
+  std::weak_ptr<bool> alive = alive_token;
+  x->*slot = anim::run(*x->transition, [alive, from, to, apply](float t) {
+    if (!alive.expired()) apply(anim::lerp(from, to, t));
+  });
+}
+} // namespace
+
+void View::set_opacity(float o) {
+  animate_value(*this, extras_.get(), alive_, style_.opacity, o, &ViewExtras::opacity_anim, [this](float v) {
+    style_.opacity = v;
+    invalidate();
+  });
+}
+
+void View::set_background(Color c) {
+  Color from = style_.background;
+  if (from.a == 0) from = c.with_alpha(0); // fade in from transparent of the same hue
+  animate_value(*this, extras_.get(), alive_, from, c, &ViewExtras::background_anim, [this](Color v) {
+    style_.background = v;
+    invalidate();
+  });
+}
+
+void View::set_border_color(Color c) {
+  Color from = style_.border;
+  if (from.a == 0) from = c.with_alpha(0);
+  animate_value(*this, extras_.get(), alive_, from, c, &ViewExtras::border_anim, [this](Color v) {
+    style_.border = v;
+    invalidate();
+  });
+}
 
 void View::set_visible(bool v) {
   if (visible_ == v) return;

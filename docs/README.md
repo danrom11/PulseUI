@@ -39,7 +39,7 @@ VStack{
 |---|---|---|
 | 5 | [Views, nodes and modifiers](05-views-and-modifiers.md) | The view tree, `Node`, chainable modifiers, ids, `find`, lifecycle |
 | 6 | [Reactive bindings](06-reactive-bindings.md) | `Bind<T>`, `Model<T>`, two-way binding, threads, lifetime |
-| 7 | [Layout](07-layout.md) | Stacks, flex, alignment, padding, `Layer`, `Scroll`, `Split`, `Tabs`, `Show`, `ForEach` |
+| 7 | [Layout](07-layout.md) | Stacks, flex, alignment, padding, `Layer`, `Scroll`, `Split`, `Tabs`, `Show`, keyed `ForEach`, `Grid`, `Wrap` |
 | 8 | [Widgets](08-widgets.md) | `Text`, `Button`, `TextField`, `Checkbox`, `Toggle`, `Slider`, `ProgressBar`, `Select`, `Segmented`, `ImageView`, `Divider`, `Spacer`, `Panel` |
 | 9 | [Styling and themes](09-styling-and-themes.md) | `Style`, colors, the theme property, light and dark, custom themes |
 | 10 | [App and windows](10-app-and-windows.md) | Event loop, timers, the UI executor, windows, shortcuts, popups, dialogs, clipboard |
@@ -51,6 +51,12 @@ VStack{
 | 16 | [Platforms](16-platforms.md) | Windows and macOS backends, HiDPI, threading rules, packaging |
 | 17 | [Patterns, pitfalls and FAQ](17-patterns-and-faq.md) | Proven structures for real apps and the mistakes to avoid |
 | 18 | [Cheat sheet](18-cheatsheet.md) | Everything on one page |
+| 19 | [Menus, dialogs and notifications](19-menus-and-dialogs.md) | Menu bar, context menus, message boxes, prompts, modal windows, sheets, toasts |
+| 20 | [Collections](20-collections.md) | Virtualized `List`, sortable `Table`, `TreeView` |
+| 21 | [More widgets](21-more-widgets.md) | `TextArea`, `NumberField`, `RadioGroup`, `Calendar`/`DatePicker`, `ColorPanel`/`ColorPicker`, `Icon` and SVG, suggestions |
+| 22 | [Animation](22-animation.md) | `.animate()`, `Show(...).transition()`, `tween(...)`, easing |
+| 23 | [Drag and drop](23-drag-and-drop.md) | Files and text into and out of windows |
+| 24 | [Accessibility](24-accessibility.md) | Screen readers (UI Automation, NSAccessibility), roles, names, actions |
 
 ## Conventions
 

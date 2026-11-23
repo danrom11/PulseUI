@@ -3,9 +3,27 @@
 
 #include <vector>
 
+#include <pulse/core/subscription.hpp>
 #include <pulseui/gfx/painter.hpp>
+#include <pulseui/ui/menu.hpp>
+
+namespace pulseui {
+class Window;
+class View;
+} // namespace pulseui
 
 namespace pulseui::platform::cocoa {
+
+// cocoa_a11y.mm
+NSArray* a11y_window_children(NSView* host, Window* w);
+id a11y_hit_test(NSView* host, Window* w, NSPoint screen);
+id a11y_focused(NSView* host, Window* w);
+void a11y_post_focus(NSView* host, Window* w, View* v);
+void a11y_forget(NSView* host);
+
+// cocoa_menu.mm
+NSMenu* default_main_menu();
+NSMenu* build_main_menu(const MenuItems& items, std::vector<pulse::subscription>& subs);
 
 NSFont* ns_font(const Font& f);
 NSDictionary* text_attributes(const Font& f, Color c, int align, bool wrap);
@@ -31,6 +49,7 @@ public:
   void polyline(const std::vector<Point>& pts, Color c, float width, bool closed) override;
   void fill_polygon(const std::vector<Point>& pts, Color c) override;
   void fill_gradient(const Rect& r, Color top, Color bottom, float radius) override;
+  void fill_path(const std::vector<std::vector<Point>>& contours, Color c, bool even_odd) override;
   void text(const Rect& r, std::string_view s, const Font& f, Color c, int align, bool wrap) override;
   void image(const Image& img, const Rect& dst, float opacity) override;
 

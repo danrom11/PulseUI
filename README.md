@@ -32,7 +32,9 @@ Everything is documented in [`docs/`](docs/README.md), from a step-by-step cours
   [layout](docs/07-layout.md) · [widgets](docs/08-widgets.md) · [styling and themes](docs/09-styling-and-themes.md) ·
   [app and windows](docs/10-app-and-windows.md) · [input](docs/11-input-and-events.md) ·
   [custom drawing](docs/12-custom-drawing.md) · [CodeEditor](docs/13-code-editor.md) · [forms](docs/14-forms-and-meta.md) ·
-  [testing](docs/15-testing.md) · [platforms](docs/16-platforms.md)
+  [testing](docs/15-testing.md) · [platforms](docs/16-platforms.md) · [menus and dialogs](docs/19-menus-and-dialogs.md) ·
+  [collections](docs/20-collections.md) · [more widgets](docs/21-more-widgets.md) · [animation](docs/22-animation.md) ·
+  [drag and drop](docs/23-drag-and-drop.md) · [accessibility](docs/24-accessibility.md)
 - **Practice:** [patterns, pitfalls and FAQ](docs/17-patterns-and-faq.md) · [cheat sheet](docs/18-cheatsheet.md)
 
 ---
@@ -58,10 +60,12 @@ Everything is documented in [`docs/`](docs/README.md), from a step-by-step cours
 
 | Category   | Views |
 |------------|-------|
-| Layout     | `VStack`, `HStack`, `Layer` (overlay / absolute positions), `Panel` (card), `Scroll`, `Split`, `Tabs`, `Spacer`, `Divider` |
-| Dynamic    | `ForEach(list, fn)`, `Show(cond, then, else)` |
-| Display    | `Text`, `ImageView`, `ProgressBar`, `Canvas` (custom drawing with `redraw_on(stream)`) |
-| Controls   | `Button`, `TextField`, `Checkbox`, `Toggle`, `Slider`, `Select` |
+| Layout     | `VStack`, `HStack`, `Grid`, `Wrap`, `Layer` (overlay / absolute positions), `Panel` (card), `Scroll`, `Split`, `Tabs`, `Spacer`, `Divider` |
+| Dynamic    | `ForEach(list, key, fn)` (keyed rows keep their state), `Show(cond, then, else).transition()` |
+| Collections | `List` (virtualized), `Table` (columns, sorting), `TreeView` |
+| Display    | `Text`, `ImageView`, `Icon` (SVG), `ProgressBar`, `Canvas` (custom drawing with `redraw_on(stream)`) |
+| Controls   | `Button`, `TextField` (with suggestions), `TextArea`, `NumberField`, `Checkbox`, `Toggle`, `RadioGroup`, `Slider`, `Select`, `Segmented`, `DatePicker`/`Calendar`, `ColorPicker`/`ColorPanel` |
+| App        | menu bar and context menus, message boxes and prompts, modal windows, toasts, drag and drop, screen readers |
 
 Common modifiers (chainable on every view): `id`, `padding`, `width`, `height`, `size`, `min_*`/`max_*`,
 `flex`, `align`, `position`, `background`, `border`, `radius`, `opacity`, `visible`, `enabled`,
@@ -185,11 +189,47 @@ src/platform/
 
 ## 🛣 Roadmap
 
-- Linux backend (Wayland/X11)
-- Multi-line text editor, menus, tree view
-- Keyed diffing for `ForEach`, animations
+- Linux backend (Wayland/X11, Cairo/Pango)
+- Complex text input: IME for Chinese and Japanese, right-to-left scripts
 
 ## 📝 Changelog
+
+### 0.4.0
+- **Keyed `ForEach(items, key, row)`**: unchanged rows keep their views and state (focus, selection, text being
+  typed), moved rows move, only new or changed items build rows. `.wrap()` lays rows out like `Wrap`.
+- **Collections**: virtualized `List`, `Table` (columns, sorting, resizing, selection by item), `TreeView`.
+- **Layout**: `Grid` (tracks, cells, spans) and `Wrap`.
+- **Menus**: `Action` / `Menu` / `Separator` values; `Window::menu()` (native menu bar on macOS, themed bar on
+  Windows with Alt/F10 and mnemonics), `.context_menu(...)`, `popup_menu`, check and radio items, shortcuts.
+- **Dialogs**: `dialogs::message / alert / confirm / prompt` (blocking) and `_async` forms (NSAlert on macOS);
+  modal windows (`show_modal`, `run_modal`), in-window sheets (`present`), popup placement options, `open_dropdown`.
+- **Widgets**: `TextArea`, `NumberField`, `RadioGroup`, `Calendar` / `DatePicker` (`Date`), `ColorPanel` /
+  `ColorPicker` (`Color::hsv`), `Icon`, toasts (`toast(win, ...)`), `TextField::suggestions(...)`.
+- **Animation**: `.animate()` for frames, opacity, background and border; `Show(...).transition()`; `tween(...)`
+  streams; `anim::run`, easings, `anim::set_speed`. The Toggle knob slides, toasts fade.
+- **Drag and drop**: `.on_drop_files(fn, extensions)`, `.on_drop_text(fn)`, `.drag_source(fn)`,
+  `Window::on_drop_files` (OLE on Windows, NSDragging on macOS).
+- **SVG icons**: `Svg::parse / load / draw`, SVG in `Button::icon` and menu icons, `Painter::fill_path` (even-odd).
+- **Accessibility**: UI Automation provider on Windows, NSAccessibility on macOS; `View::accessibility()`,
+  `accessibility_action()`, `.a11y_label / a11y_role / a11y_description / a11y_hidden`.
+- `CodeEditor`: breakpoints in the gutter (`breakpoints`, `breakpoint_toggled`) and `execution_line`.
+- Forms: `ForEach` row templates, `Tabs`, `Canvas`, `Grid`, `Wrap`, components (`Component`: another form,
+  `Ui::Form::part(m)`), project view classes (`Custom`) and every new widget; `meta::Property::bind_once`,
+  `TypeInfo::init_new`, `TypeInfo::child_title`.
+- `Window::set_headless` (tests never put windows on screen), `Window::activate`, `popups()`, `top_views()`.
+- `CodeEditor`: a right-click menu (Undo, Redo, Cut, Copy, Paste, Select All; `standard_menu()`,
+  `set_menu_labels`) and the same actions as members (`undo`, `redo`, `cut`, `copy`, `paste`, `select_all`).
+- Generated form code calls list-row handlers through `pulseui::form_call` (Apple clang 15 compiles it).
+- `NumberField`: setting value, min and max in any order keeps the value (forms load them one by one).
+- Builds without warnings with Apple clang, clang and GCC (`-Wall -Wextra`).
+- `CodeEditor`: completion items can place the caret with `$0` in `insert` (`"resize($0)"`, multi-line snippets).
+- `CodeEditor`: **parameter hints**: a provider can return `CompletionResult::signature` with the current
+  parameter range; the editor shows it after `(` and `,` and highlights the parameter being typed.
+- `CodeEditor`: Enter between `{}` or `()` puts the closing bracket on its own line.
+- `CodeEditor`: `auto_close()` brackets and quotes, `line_comment("//")` with Ctrl+/, matching-bracket highlight,
+  `hover(provider)` tooltips, `definition_requested` on Ctrl+click, search and replace (`set_search`, `find_next`,
+  `replace_current`, `replace_all`) and range editing (`select`, `replace_range`, `replace_all_text`).
+- `Key::Slash`; shortcuts accept `"/"`, `"PageUp"`, `"PageDown"`, `"Insert"`.
 
 ### 0.3.0
 - **Form bindings**: a `.pform` can bind view properties to members of a model (`"bind": {"text": "email"}`) and

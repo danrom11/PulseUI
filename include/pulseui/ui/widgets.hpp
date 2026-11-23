@@ -6,6 +6,7 @@
 
 #include <pulse/core/observable.hpp>
 #include <pulse/core/signal.hpp>
+#include <pulseui/gfx/svg.hpp>
 #include <pulseui/ui/containers.hpp>
 #include <pulseui/ui/view.hpp>
 
@@ -40,6 +41,8 @@ public:
 
   Size measure_content(Size avail) override;
   void paint_content(Painter& p) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
 
   // designer access
   float font_size_value() const { return font_size_; }
@@ -95,10 +98,21 @@ public:
   Size measure_content(Size avail) override;
   void paint(Painter& p) override;
   bool on_event(InputEvent& e) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
+  void press(); // what a click does
 
 private:
   std::string label_, icon_;
   ButtonKind kind_ = ButtonKind::Normal;
+};
+
+// One entry of a TextField's suggestion list.
+struct Suggestion {
+  std::string label;  // shown
+  std::string detail; // shown dimmed on the right (a type, a hint)
+  std::string value;  // put into the field when chosen (empty: the label)
+  bool operator==(const Suggestion&) const = default;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,12 +130,19 @@ public:
   PULSEUI_MOD(TextField, placeholder, (Bind<std::string> p),
               bind(p, [](View& v, const std::string& x) { static_cast<TextField&>(v).set_placeholder(x); });)
   PULSEUI_MOD(TextField, password, (bool p = true), password_ = p;)
+  // One-way: show a value / follow a stream (edits are not written back).
+  PULSEUI_MOD(TextField, bind_text, (Bind<std::string> t),
+              bind(t, [](View& v, const std::string& x) { static_cast<TextField&>(v).set_text(x); });)
   // Two-way bind to a model after construction.
   PULSEUI_MOD(TextField, model, (Model<std::string>& m), model_ = &m;
               bind(Bind<std::string>(m), [](View& v, const std::string& x) { static_cast<TextField&>(v).set_text(x); });)
   PULSEUI_MOD(TextField, on_change, (std::function<void(const std::string&)> fn), changed.connect(std::move(fn));)
   PULSEUI_MOD(TextField, on_submit, (std::function<void(const std::string&)> fn), submitted.connect(std::move(fn));)
   PULSEUI_MOD(TextField, on_commit, (std::function<void(const std::string&)> fn), committed.connect(std::move(fn));)
+  // Autocomplete: a list under the field while it has the focus, rebuilt from
+  // the text after every edit. Up/Down choose, Enter or Tab take, Escape closes.
+  //   TextField(city).suggestions([&](const std::string& t) { return cities_starting_with(t); })
+  PULSEUI_MOD(TextField, suggestions, (std::function<std::vector<Suggestion>(const std::string&)> fn), suggest_ = std::move(fn);)
 
   pulse::signal<std::string> changed;   // every edit
   pulse::signal<std::string> submitted; // Enter
@@ -137,6 +158,18 @@ public:
   void paint(Painter& p) override;
   bool on_event(InputEvent& e) override;
   void on_focus(bool f) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
+
+  // suggestions
+  bool suggestions_open() const { return sugg_popup_ != nullptr; }
+  const std::vector<Suggestion>& current_suggestions() const { return sugg_items_; }
+  void refresh_suggestions();
+  void close_suggestions();
+  void accept_suggestion(int index);
+
+protected:
+  void on_unmount() override { close_suggestions(); }
 
 private:
   void edit(std::string new_text, std::size_t caret);
@@ -151,6 +184,10 @@ private:
   std::size_t caret_ = 0, sel_ = 0; // byte offsets on code point boundaries
   float scroll_ = 0;
   bool password_ = false, selecting_ = false;
+  std::function<std::vector<Suggestion>(const std::string&)> suggest_;
+  std::vector<Suggestion> sugg_items_;
+  View* sugg_popup_ = nullptr;
+  int sugg_index_ = -1;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -171,12 +208,26 @@ public:
   PULSEUI_MOD(D, on_change, (std::function<void(bool)> fn), changed.connect(std::move(fn));)
   PULSEUI_MOD(D, model, (Model<bool>& m), model_ = &m;
               this->bind(Bind<bool>(m), [](View& v, bool b) { static_cast<BoolInputT&>(v).set_checked(b, false); });)
+  PULSEUI_MOD(D, bind_checked, (Bind<bool> b),
+              this->bind(b, [](View& v, bool x) { static_cast<BoolInputT&>(v).set_checked(x, false); });)
 
   pulse::signal<bool> changed;
   bool checked() const { return checked_; }
   void set_checked(bool c, bool notify = true) {
     if (checked_ == c) return;
     checked_ = c;
+    // the indicator slides / fades between the states
+    if (this->mounted() && anim::speed() > 0) {
+      std::weak_ptr<bool> alive = this->alive_;
+      const float from = knob_, to = c ? 1.f : 0.f;
+      knob_anim_ = anim::run(Transition(std::chrono::milliseconds(140)), [this, alive, from, to](float t) {
+        if (alive.expired()) return;
+        knob_ = anim::lerp(from, to, t);
+        this->invalidate();
+      });
+    } else {
+      knob_ = c ? 1.f : 0.f;
+    }
     this->invalidate();
     if (notify) {
       if (model_) model_->set(c);
@@ -188,6 +239,20 @@ public:
 
   Size measure_content(Size avail) override;
   bool on_event(InputEvent& e) override;
+  void accessibility(A11yInfo& info) const override {
+    View::accessibility(info);
+    info.role = std::string(this->type_name()) == "Toggle" ? Role::Switch : Role::CheckBox;
+    info.name = label_;
+    info.checked = checked_ ? 1 : 0;
+  }
+  bool accessibility_action(A11yAction a, const std::string& arg) override {
+    if (a == A11yAction::Toggle || a == A11yAction::Press) {
+      if (!this->is_enabled()) return false;
+      set_checked(!checked_);
+      return true;
+    }
+    return View::accessibility_action(a, arg);
+  }
 
 protected:
   void init(Bind<std::string> label) {
@@ -200,6 +265,8 @@ protected:
   Model<bool>* model_ = nullptr;
   std::string label_;
   bool checked_ = false;
+  float knob_ = 0; // 0 = off, 1 = on (animated)
+  pulse::subscription knob_anim_;
 };
 
 class Checkbox : public BoolInputT<Checkbox> {
@@ -238,6 +305,7 @@ public:
   PULSEUI_MOD(Slider, on_change, (std::function<void(double)> fn), changed.connect(std::move(fn));)
   PULSEUI_MOD(Slider, model, (Model<double>& m), model_ = &m;
               bind(Bind<double>(m), [](View& v, double x) { static_cast<Slider&>(v).set_value(x, false); });)
+  PULSEUI_MOD(Slider, bind_value, (Bind<double> b), bind(b, [](View& v, double x) { static_cast<Slider&>(v).set_value(x, false); });)
   pulse::signal<double> changed;
 
   double value() const { return value_; }
@@ -249,6 +317,8 @@ public:
   Size measure_content(Size avail) override;
   void paint_content(Painter& p) override;
   bool on_event(InputEvent& e) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
 
 private:
   void set_from_x(float x);
@@ -267,6 +337,8 @@ public:
   void set_value(double v);
   Size measure_content(Size avail) override;
   void paint_content(Painter& p) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
 
 private:
   double value_ = 0;
@@ -288,6 +360,7 @@ public:
               bind(Bind<int>(m), [](View& v, int i) { static_cast<Select&>(v).set_index(i, false); });)
   PULSEUI_MOD(Select, bind_options, (Bind<std::vector<std::string>> o),
               bind(o, [](View& v, const std::vector<std::string>& x) { static_cast<Select&>(v).set_options(x); });)
+  PULSEUI_MOD(Select, bind_index, (Bind<int> b), bind(b, [](View& v, int i) { static_cast<Select&>(v).set_index(i, false); });)
   pulse::signal<int> changed;
 
   int index() const { return index_; }
@@ -298,6 +371,8 @@ public:
   Size measure_content(Size avail) override;
   void paint(Painter& p) override;
   bool on_event(InputEvent& e) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
 
 private:
   void open_popup();
@@ -319,6 +394,12 @@ public:
   const char* type_name() const override { return "Segmented"; }
 
   PULSEUI_MOD(Segmented, on_change, (std::function<void(int)> fn), changed.connect(std::move(fn));)
+  PULSEUI_MOD(Segmented, model, (Model<int>& m), model_ = &m;
+              bind(Bind<int>(m), [](View& v, int i) { static_cast<Segmented&>(v).set_index(i, false); });)
+  PULSEUI_MOD(Segmented, bind_index, (Bind<int> b), bind(b, [](View& v, int i) { static_cast<Segmented&>(v).set_index(i, false); });)
+  PULSEUI_MOD(Segmented, bind_options, (Bind<std::vector<std::string>> o),
+              bind(o, [](View& v, const std::vector<std::string>& x) { static_cast<Segmented&>(v).set_options(x); });)
+  const std::vector<std::string>& options() const { return options_; }
   pulse::signal<int> changed;
 
   int index() const { return index_; }
@@ -328,6 +409,8 @@ public:
   Size measure_content(Size avail) override;
   void paint(Painter& p) override;
   bool on_event(InputEvent& e) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
 
 private:
   std::vector<float> widths() const;
@@ -367,13 +450,19 @@ public:
   void set_current(int i, bool notify = true);
   const std::vector<std::string>& titles() const { return titles_; }
   void set_title(int i, std::string t);
+  void set_titles(std::vector<std::string> t) { titles_ = std::move(t); sync_pages(); invalidate_layout(); }
+  std::size_t page_count() const { return children_.size(); }
+  std::string title_of(std::size_t i) const { return i < titles_.size() ? titles_[i] : "Tab " + std::to_string(i + 1); }
 
   Size measure_content(Size avail) override;
   void layout() override;
   void paint(Painter& p) override;
   bool on_event(InputEvent& e) override;
+  void accessibility(A11yInfo& info) const override;
+  bool accessibility_action(A11yAction a, const std::string& arg) override;
 
 private:
+  void sync_pages(); // one title per page, only the current page visible
   float header_height() const;
   int tab_at(Point p) const;
   std::vector<std::string> titles_;
@@ -418,6 +507,10 @@ public:
   void set_orientation(Orientation o) { orientation_ = o; invalidate(); }
   Size measure_content(Size) override;
   void paint_content(Painter& p) override;
+  void accessibility(A11yInfo& info) const override {
+    View::accessibility(info);
+    info.role = Role::Separator;
+  }
 
 private:
   Orientation orientation_;
@@ -437,10 +530,41 @@ public:
   Size measure_content(Size) override;
   void paint_content(Painter& p) override;
   void set_image(Image i) { image_ = std::move(i); invalidate_layout(); }
+  void accessibility(A11yInfo& info) const override {
+    View::accessibility(info);
+    info.role = Role::Image;
+  }
 
 private:
   Image image_;
   std::string source_;
+};
+
+// An icon: SVG markup, an .svg file or a text glyph, drawn in the text color
+// (or .color(...)). Monochrome by default; .original_colors() keeps the SVG's own.
+//   Icon("icons/folder.svg").size(20).color(th().accent)
+class Icon : public ViewT<Icon> {
+public:
+  using ViewT<Icon>::size;
+  Icon() = default;
+  explicit Icon(std::string source);
+  explicit Icon(Svg svg) : svg_(std::move(svg)) {}
+  const char* type_name() const override { return "Icon"; }
+  PULSEUI_MOD(Icon, size, (float s), style_.width = s; style_.height = s;)
+  PULSEUI_MOD(Icon, color, (Bind<Color> c), bind(c, [](View& v, const Color& x) { static_cast<Icon&>(v).set_color(x); });)
+  PULSEUI_MOD(Icon, original_colors, (bool o = true), tint_ = !o;)
+  void set_color(std::optional<Color> c) { color_ = c; invalidate(); }
+  const std::string& source() const { return source_; }
+  void set_source(std::string s);
+  const Svg& svg() const { return svg_; }
+  Size measure_content(Size) override;
+  void paint_content(Painter& p) override;
+
+private:
+  std::string source_;
+  Svg svg_;
+  std::optional<Color> color_;
+  bool tint_ = true;
 };
 
 // Custom drawing. Redraws automatically when any `redraw_on` stream emits.

@@ -204,6 +204,17 @@ Show(logged_in,
 **stay mounted**, so text typed into a hidden form is still there when it reappears. For a single view,
 `.visible(cond)` is simpler.
 
+`.transition()` makes the switch smooth: the branches cross-fade and the space they take grows or shrinks
+over the transition, so the views below slide instead of jumping. A `Show` without an `else` branch
+then expands and collapses:
+
+```cpp
+Show(details_open, details()).transition()            // 200 ms, ease-out
+Show(big, chart(), sparkline()).transition(300ms, Easing::EaseInOut)
+```
+
+See [Animation](22-animation.md).
+
 ## `ForEach`: lists
 
 ```cpp
@@ -217,10 +228,74 @@ ForEach(tags, ...).horizontal().spacing(6)
 - The function builds one view per item. It may take `(item)` or `(item, index)`.
 - `ForEach` is a stack: vertical by default with `spacing(4)`; `.horizontal()` lays items out in a row.
   All stack modifiers apply.
-- When the list changes, all rows are rebuilt. Capture **ids**, not references to items, in row
-  callbacks (see [Tutorial, part 3](03-tutorial.md#part-3-todo-list)).
+- Without a key, all rows are rebuilt when the list changes. Capture **ids**, not references to items,
+  in row callbacks (see [Tutorial, part 3](03-tutorial.md#part-3-todo-list)).
 
-Combine with `Scroll` for long lists: `Scroll(ForEach(...)).flex()`.
+### Keyed `ForEach`: rows that keep their state
+
+Pass a key function before the row function:
+
+```cpp
+ForEach(todos, [](const Todo& t) { return t.id; }, [&](const Todo& t) {
+  return HStack{ Checkbox("", t.done), TextField(t.title).flex() };
+})
+```
+
+Rows are matched by key when the list changes:
+
+- a row whose item is unchanged is **kept** - with its state: keyboard focus, selection, scroll
+  position, text being typed;
+- a moved item moves its row (no rebuild);
+- only new items and items that changed build a new row; rows of removed items go away;
+- while a row has the keyboard focus it is kept even if its item changed, so typing in a row is never
+  interrupted by an update of the list.
+
+Keys may be numbers or strings. Items are compared with `==` when the type has it (otherwise a row
+with the same key is always reused).
+
+### Wrapping rows
+
+`.wrap()` lays the rows side by side and wraps them onto the next line, like [`Wrap`](#wrap-rows-that-wrap) -
+for cards, tags or thumbnails:
+
+```cpp
+Scroll(ForEach(photos, photo_card).wrap().spacing(12)).flex()
+```
+
+### Thousands of rows
+
+`ForEach` builds a view for every item. For long lists (thousands of rows) use the virtualized
+[`List`, `Table` and `TreeView`](20-collections.md), which only create or paint what is on screen.
+
+Combine with `Scroll` for medium lists: `Scroll(ForEach(...)).flex()`.
+
+## `Grid`: rows and columns
+
+```cpp
+Grid{
+  Text("Name"),     TextField(name),
+  Text("Email"),    TextField(email),
+  Text("Notes"),    TextArea(notes).cell(2, 1, 2, 1),   // row 2, column 1, spanning 2 rows
+  Button("Save", save).span(2),                         // the next free row, both columns
+}.columns({Track::automatic(), Track::fr(1)}).spacing(8)
+```
+
+- Children fill the cells row by row. `.cell(row, col, row_span, col_span)` places a child explicitly,
+  `.span(n)` makes it span `n` columns in the automatic flow.
+- Columns are tracks: `Track::px(120)` (fixed), `Track::automatic()` (as wide as the widest child),
+  `Track::fr(n)` (a share of the remaining width). `.columns(3)` makes three equal columns.
+- Rows are as tall as their tallest child. `.spacing(s)` sets both gaps, `.gaps(rows, cols)` each one.
+- `.align_items(...)` aligns children inside their cells (stretch by default).
+
+## `Wrap`: rows that wrap
+
+```cpp
+Wrap{ chip("c++"), chip("reactive"), chip("desktop"), chip("ui") }.spacing(6)
+```
+
+Children are laid out in a row and continue on the next line when the width runs out (tags, chips,
+toolbars that wrap). `.line_spacing(s)` sets the gap between lines, `.justify(...)` the alignment of
+each line.
 
 ## Layout and performance
 

@@ -1,3 +1,4 @@
+#include <pulseui/gfx/svg.hpp>
 #include <pulseui/ui/theme.hpp>
 #include <pulseui/ui/widgets.hpp>
 #include <pulseui/ui/window.hpp>
@@ -95,6 +96,11 @@ Button::Button(Bind<std::string> label, std::function<void()> on_click) {
 
 Size Button::measure_content(Size) {
   const Theme& t = th();
+  if (is_svg_icon(icon_)) {
+    const Size ts = label_.empty() ? Size{0, 0} : measure_text(label_, t.font.with_weight(FontWeight::Medium), 0);
+    const float icon_w = t.font.size * 1.25f;
+    return {std::ceil(ts.w) + icon_w + (label_.empty() ? 0 : 6) + 2, std::max(ts.h, t.control_height)};
+  }
   std::string s = icon_.empty() ? label_ : (label_.empty() ? icon_ : icon_ + "  " + label_);
   Size ts = measure_text(s, t.font.with_weight(FontWeight::Medium), 0);
   return {std::ceil(ts.w) + 2, std::max(ts.h, t.control_height)};
@@ -125,8 +131,20 @@ void Button::paint(Painter& p) {
   if (style_.background.a > 0 && kind_ == ButtonKind::Normal) bg = style_.background;
   p.fill_rect(r, bg, rad);
   if (border.a > 0) p.stroke_rect(r, border, 1, rad);
-  std::string s = icon_.empty() ? label_ : (label_.empty() ? icon_ : icon_ + "  " + label_);
-  p.text(content_rect(), s, t.font.with_weight(FontWeight::Medium), fg, Align::Center);
+  if (is_svg_icon(icon_)) {
+    // SVG icon + label, centred together
+    const Font f = t.font.with_weight(FontWeight::Medium);
+    const float icon_w = t.font.size * 1.25f;
+    const float tw = label_.empty() ? 0 : std::ceil(measure_text(label_, f, 0).w);
+    const float total = icon_w + (label_.empty() ? 0 : 6 + tw);
+    const Rect c = content_rect();
+    const float x = c.x + (c.w - total) / 2;
+    draw_icon(p, icon_, {x, c.y, icon_w, c.h}, fg, t.font);
+    if (!label_.empty()) p.text({x + icon_w + 6, c.y, tw + 4, c.h}, label_, f, fg, Align::LeftCenter);
+  } else {
+    std::string s = icon_.empty() ? label_ : (label_.empty() ? icon_ : icon_ + "  " + label_);
+    p.text(content_rect(), s, t.font.with_weight(FontWeight::Medium), fg, Align::Center);
+  }
   if (focused()) focus_ring(p, r, rad);
 }
 
@@ -200,6 +218,152 @@ void TextField::edit(std::string new_text, std::size_t caret) {
   std::weak_ptr<bool> alive = alive_;
   if (model_) model_->set(text_);
   if (!alive.expired()) changed.emit(text_);
+  if (!alive.expired() && suggest_ && focused()) refresh_suggestions();
+}
+
+// ── suggestions ──────────────────────────────────────────────────────────────
+namespace {
+class SuggestPopup : public ViewT<SuggestPopup> {
+public:
+  static constexpr float kRow = 26;
+  static constexpr int kMaxRows = 8;
+  SuggestPopup() { hover_repaint_ = true; }
+  const char* type_name() const override { return "Suggestions"; }
+  std::vector<Suggestion> items;
+  int index = -1, first = 0;
+  std::function<void(int)> on_pick;
+  std::function<void(int)> on_hover;
+
+  void keep_visible() {
+    if (index < first) first = std::max(0, index);
+    if (index >= first + kMaxRows) first = index - kMaxRows + 1;
+  }
+  Size measure_content(Size) override {
+    const Theme& t = th();
+    float w = 160;
+    for (auto& s : items) {
+      float rw = measure_text(s.label, t.font, 0).w + 24;
+      if (!s.detail.empty()) rw += measure_text(s.detail, t.font_small, 0).w + 20;
+      w = std::max(w, std::ceil(rw));
+    }
+    const int rows = std::min<int>(kMaxRows, static_cast<int>(items.size()));
+    return {std::min(w, 520.f), rows * kRow + 6};
+  }
+  void paint(Painter& p) override {
+    const Theme& t = th();
+    p.fill_rect(bounds(), t.surface, t.radius);
+    p.stroke_rect(bounds(), t.border, 1, t.radius);
+    const int rows = std::min<int>(kMaxRows, static_cast<int>(items.size()) - first);
+    for (int r = 0; r < rows; ++r) {
+      const int i = first + r;
+      const Rect row{3, 3 + r * kRow, frame_.w - 6, kRow};
+      const bool sel = i == index;
+      if (sel) p.fill_rect(row, t.accent, t.radius_small);
+      const Suggestion& s = items[static_cast<std::size_t>(i)];
+      p.text({row.x + 8, row.y, row.w - 16, row.h}, s.label, t.font, sel ? t.on_accent : t.text, Align::LeftCenter);
+      if (!s.detail.empty())
+        p.text({row.x + 8, row.y, row.w - 16, row.h}, s.detail, t.font_small, sel ? t.on_accent.with_alpha(0.85f) : t.text_dim,
+               Align::RightCenter);
+    }
+    if (static_cast<int>(items.size()) > kMaxRows) { // a thin scroll indicator
+      const float h = frame_.h - 6, th_h = std::max(16.f, h * kMaxRows / items.size());
+      const float y = 3 + (h - th_h) * first / std::max<int>(1, static_cast<int>(items.size()) - kMaxRows);
+      p.fill_rect({frame_.w - 5, y, 3, th_h}, t.scrollbar, 1.5f);
+    }
+  }
+  int row_at(Point pt) const {
+    const int r = static_cast<int>((pt.y - 3) / kRow);
+    const int i = first + r;
+    return r >= 0 && r < kMaxRows && i < static_cast<int>(items.size()) ? i : -1;
+  }
+  bool on_event(InputEvent& e) override {
+    switch (e.type) {
+      case InputEvent::MouseMove: {
+        const int i = row_at(e.pos);
+        if (i >= 0 && i != index && on_hover) on_hover(i);
+        return true;
+      }
+      case InputEvent::MouseDown: {
+        const int i = row_at(e.pos);
+        if (i >= 0 && on_pick) on_pick(i);
+        return true;
+      }
+      case InputEvent::Wheel:
+        first = std::clamp(first - static_cast<int>(e.wheel_dy * 3), 0, std::max(0, static_cast<int>(items.size()) - kMaxRows));
+        invalidate();
+        return true;
+      default:
+        return e.is_mouse();
+    }
+  }
+};
+} // namespace
+
+void TextField::refresh_suggestions() {
+  if (!suggest_ || !window()) return;
+  std::vector<Suggestion> list = suggest_(text_);
+  if (list.empty()) {
+    close_suggestions();
+    return;
+  }
+  // keep the chosen entry when it is still there
+  const std::string chosen = sugg_index_ >= 0 && sugg_index_ < static_cast<int>(sugg_items_.size())
+                                 ? sugg_items_[static_cast<std::size_t>(sugg_index_)].label : std::string();
+  sugg_items_ = std::move(list);
+  sugg_index_ = 0;
+  for (std::size_t i = 0; i < sugg_items_.size(); ++i)
+    if (sugg_items_[i].label == chosen) sugg_index_ = static_cast<int>(i);
+  if (auto* pop = static_cast<SuggestPopup*>(sugg_popup_)) {
+    pop->items = sugg_items_;
+    pop->index = sugg_index_;
+    pop->first = 0;
+    pop->keep_visible();
+    pop->invalidate_layout();
+    return;
+  }
+  SuggestPopup pop;
+  pop.items = sugg_items_;
+  pop.index = sugg_index_;
+  std::weak_ptr<bool> alive = alive_;
+  pop.on_pick = [this, alive](int i) {
+    if (!alive.expired()) accept_suggestion(i);
+  };
+  pop.on_hover = [this, alive](int i) {
+    if (alive.expired() || !sugg_popup_) return;
+    sugg_index_ = i;
+    static_cast<SuggestPopup*>(sugg_popup_)->index = i;
+    sugg_popup_->invalidate();
+  };
+  sugg_popup_ = window()->open_dropdown(std::move(pop), *this, [this, alive] {
+    if (alive.expired()) return;
+    sugg_popup_ = nullptr;
+  });
+}
+
+void TextField::close_suggestions() {
+  if (sugg_popup_ && window()) {
+    View* p = sugg_popup_;
+    sugg_popup_ = nullptr;
+    window()->close_popup(p);
+  }
+  sugg_popup_ = nullptr;
+  sugg_index_ = -1;
+}
+
+void TextField::accept_suggestion(int index) {
+  if (index < 0 || index >= static_cast<int>(sugg_items_.size())) return;
+  const Suggestion s = sugg_items_[static_cast<std::size_t>(index)];
+  close_suggestions();
+  const std::string v = s.value.empty() ? s.label : s.value;
+  std::weak_ptr<bool> alive = alive_;
+  text_ = v;
+  caret_ = sel_ = text_.size();
+  ensure_caret_visible();
+  invalidate();
+  if (model_) model_->set(text_);
+  if (!alive.expired()) changed.emit(text_);
+  if (!alive.expired()) submitted.emit(text_);
+  if (!alive.expired()) committed.emit(text_);
 }
 
 void TextField::delete_selection() {
@@ -275,6 +439,33 @@ void TextField::paint(Painter& p) {
 }
 
 bool TextField::on_event(InputEvent& e) {
+  if (sugg_popup_ && e.type == InputEvent::KeyDown) {
+    auto* pop = static_cast<SuggestPopup*>(sugg_popup_);
+    const int n = static_cast<int>(sugg_items_.size());
+    switch (e.key) {
+      case Key::Down:
+      case Key::Up:
+        sugg_index_ = n ? (sugg_index_ + (e.key == Key::Down ? 1 : -1) + n) % n : -1;
+        pop->index = sugg_index_;
+        pop->keep_visible();
+        pop->invalidate();
+        return true;
+      case Key::Enter:
+        if (sugg_index_ >= 0) {
+          accept_suggestion(sugg_index_);
+          return true;
+        }
+        break;
+      case Key::Tab:
+        if (sugg_index_ >= 0) accept_suggestion(sugg_index_);
+        return false; // the focus moves on
+      case Key::Escape:
+        close_suggestions();
+        return true;
+      default:
+        break;
+    }
+  }
   switch (e.type) {
     case InputEvent::MouseDown: {
       if (e.button != MouseButton::Left) return true;
@@ -391,6 +582,8 @@ bool TextField::on_event(InputEvent& e) {
 
 void TextField::on_focus(bool f) {
   invalidate();
+  if (f && suggest_) refresh_suggestions();
+  if (!f) close_suggestions();
   if (!f) {
     sel_ = caret_;
     committed.emit(text_);
@@ -447,10 +640,12 @@ void Toggle::paint_content(Painter& p) {
   const Theme& t = th();
   const Rect cr = content_rect();
   const Rect track{cr.x, cr.y + (cr.h - 20) / 2, 36, 20};
-  p.fill_rect(track, checked_ ? (hovered_ ? t.accent_hover : t.accent) : (hovered_ ? t.control_hover : t.control), 10);
-  if (!checked_) p.stroke_rect(track, t.border, 1, 10);
-  const float kx = checked_ ? track.right() - 18 : track.x + 2;
-  p.fill_ellipse({kx, track.y + 2, 16, 16}, checked_ ? t.on_accent : t.text_dim);
+  const float k = knob_;
+  const Color off = hovered_ ? t.control_hover : t.control, on = hovered_ ? t.accent_hover : t.accent;
+  p.fill_rect(track, Color::mix(off, on, k), 10);
+  if (k < 1) p.stroke_rect(track, t.border.with_alpha(t.border.a * (1 - k)), 1, 10);
+  const float kx = track.x + 2 + (track.w - 20) * k;
+  p.fill_ellipse({kx, track.y + 2, 16, 16}, Color::mix(t.text_dim, t.on_accent, k));
   if (focused()) focus_ring(p, track, 10);
   if (!label_.empty())
     p.text({track.right() + 8, cr.y, cr.w - 44, cr.h}, label_, t.font, t.text, Align::LeftCenter);
@@ -650,8 +845,7 @@ void Select::open_popup() {
   Panel box;
   box.padding(Insets(0)).width(std::max(frame_.w, 120.f));
   box.add(Scroll(std::move(list)).max_height(320));
-  const Point at = to_window({0, frame_.h + 4});
-  popup_ = window()->open_popup(std::move(box), at, [this] {
+  popup_ = window()->open_dropdown(std::move(box), *this, [this] {
     popup_ = nullptr;
     invalidate();
   });
@@ -778,9 +972,14 @@ void Tabs::bind_model(Model<int>& m) {
   bind(Bind<int>(m), [](View& v, int i) { static_cast<Tabs&>(v).set_current(i, false); });
 }
 
+void Tabs::sync_pages() {
+  while (titles_.size() < children_.size()) titles_.push_back("Tab " + std::to_string(titles_.size() + 1));
+  for (std::size_t k = 0; k < children_.size(); ++k) children_[k]->set_visible(static_cast<int>(k) == current_);
+}
+
 void Tabs::set_current(int i, bool notify) {
-  if (titles_.empty()) return;
-  i = std::clamp(i, 0, static_cast<int>(titles_.size()) - 1);
+  if (children_.empty()) return;
+  i = std::clamp(i, 0, static_cast<int>(children_.size()) - 1);
   if (i == current_) return;
   current_ = i;
   for (std::size_t k = 0; k < children_.size(); ++k) children_[k]->set_visible(static_cast<int>(k) == i);
@@ -820,6 +1019,11 @@ Size Tabs::measure_content(Size avail) {
 }
 
 void Tabs::layout() {
+  if (titles_.size() != children_.size()) {
+    // pages added or removed as plain children (forms, the designer)
+    if (titles_.size() > children_.size()) titles_.resize(children_.size());
+    sync_pages();
+  }
   const Rect cr = content_rect();
   const Rect body{cr.x, cr.y + header_height(), cr.w, std::max(0.f, cr.h - header_height())};
   for (auto& c : children_) {
@@ -966,6 +1170,28 @@ void Divider::paint_content(Painter& p) {
   const Rect cr = content_rect();
   if (orientation_ == Orientation::Horizontal) p.fill_rect({cr.x, cr.y + cr.h / 2 - 0.5f, cr.w, 1}, th().border);
   else p.fill_rect({cr.x + cr.w / 2 - 0.5f, cr.y, 1, cr.h}, th().border);
+}
+
+Icon::Icon(std::string source) { set_source(std::move(source)); }
+
+void Icon::set_source(std::string s) {
+  source_ = std::move(s);
+  if (is_svg_icon(source_)) svg_ = source_.find('<') != std::string::npos ? Svg::parse(source_) : Svg::load(source_);
+  else svg_ = Svg();
+  invalidate_layout();
+}
+
+Size Icon::measure_content(Size) {
+  const float s = th().font.size * 1.25f;
+  return {s, s};
+}
+
+void Icon::paint_content(Painter& p) {
+  const Theme& t = th();
+  const Color c = color_.value_or(is_enabled() ? t.text : t.text_disabled);
+  const Rect r = content_rect();
+  if (svg_.valid()) svg_.draw(p, r, c, tint_);
+  else if (!source_.empty()) p.text(r, source_, t.font.with_size(std::min(r.w, r.h) * 0.8f), c, Align::Center);
 }
 
 ImageView::ImageView(Bind<Image> img) {

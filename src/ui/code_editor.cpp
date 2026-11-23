@@ -80,6 +80,66 @@ CodeEditor::CodeEditor() {
   focusable_ = true;
   cursor_ = Cursor::IBeam;
   style_.clip = true;
+  // right click: Undo / Cut / Copy / Paste ... (.context_menu(...) replaces it)
+  extras().context_menu = [this] { return standard_menu(); };
+}
+
+// ── clipboard / undo, also used by the standard context menu ──────────────────
+
+void CodeEditor::select_all() {
+  anchor_ = {0, 0};
+  caret_ = {lines_.size() - 1, lines_.back().size()};
+  invalidate();
+}
+
+void CodeEditor::copy() {
+  if (has_selection()) App::set_clipboard(selected_text());
+}
+
+void CodeEditor::cut() {
+  if (!has_selection()) return;
+  App::set_clipboard(selected_text());
+  if (read_only_) return;
+  push_undo(0);
+  erase_selection();
+  edited();
+}
+
+void CodeEditor::paste() {
+  if (read_only_) return;
+  push_undo(0);
+  insert(App::clipboard());
+  edited();
+}
+
+void CodeEditor::undo_redo(bool redo) {
+  if (read_only_) return;
+  auto& from = redo ? redo_ : undo_;
+  auto& to = redo ? undo_ : redo_;
+  if (from.empty()) return;
+  to.push_back({lines_, caret_, anchor_});
+  Snapshot s = std::move(from.back());
+  from.pop_back();
+  lines_ = std::move(s.lines);
+  caret_ = s.caret;
+  anchor_ = s.anchor;
+  last_edit_kind_ = 0;
+  edited();
+}
+
+MenuItems CodeEditor::standard_menu() {
+  MenuItems m;
+  if (!read_only_) {
+    m.push_back(Action(i18n_undo_, [this] { undo(); }).shortcut("Ctrl+Z").enabled(can_undo()));
+    m.push_back(Action(i18n_redo_, [this] { redo(); }).shortcut("Ctrl+Shift+Z").enabled(can_redo()));
+    m.push_back(Separator());
+    m.push_back(Action(i18n_cut_, [this] { cut(); }).shortcut("Ctrl+X").enabled(has_selection()));
+  }
+  m.push_back(Action(i18n_copy_, [this] { copy(); }).shortcut("Ctrl+C").enabled(has_selection()));
+  if (!read_only_) m.push_back(Action(i18n_paste_, [this] { paste(); }).shortcut("Ctrl+V"));
+  m.push_back(Separator());
+  m.push_back(Action(i18n_select_all_, [this] { select_all(); }).shortcut("Ctrl+A"));
+  return m;
 }
 
 CodeEditor::CodeEditor(Model<std::string>& model) : CodeEditor() { bind_model(model); }
@@ -109,6 +169,8 @@ void CodeEditor::set_text(std::string_view t) {
   anchor_ = caret_;
   undo_.clear();
   redo_.clear();
+  update_matches();
+  hide_hover();
   clamp_scroll();
   invalidate();
 }
@@ -148,6 +210,21 @@ void CodeEditor::metrics() {
   f.size = th().font.size;
   char_w_ = measure_text("MMMMMMMMMM", f, 0).w / 10.f;
   line_h_ = std::ceil(line_height(f)) + 3;
+}
+
+void CodeEditor::set_execution_line(int line) {
+  if (line == exec_line_) return;
+  exec_line_ = line;
+  if (line > 0 && static_cast<std::size_t>(line) <= lines_.size()) {
+    // scroll it into view without moving the caret
+    const float y = kTopPad + static_cast<float>(line - 1) * line_h_;
+    const float h = frame_.h;
+    if (h > 0 && (y < scroll_.y || y + line_h_ > scroll_.y + h)) {
+      scroll_.y = y - h / 3;
+      clamp_scroll();
+    }
+  }
+  invalidate();
 }
 
 float CodeEditor::gutter_width() const {
@@ -230,6 +307,8 @@ void CodeEditor::push_undo(int kind) {
 }
 
 void CodeEditor::edited() {
+  update_matches();
+  hide_hover();
   ensure_visible();
   invalidate();
   std::weak_ptr<bool> alive = alive_;
@@ -268,6 +347,7 @@ void CodeEditor::move_caret(Pos p, bool select) {
   preferred_col_cp_ = cp_count(std::string_view(lines_[caret_.line]).substr(0, caret_.col));
   ensure_visible();
   invalidate();
+  refresh_hint(false); // follows the caret while open (closes outside the call)
 }
 
 void CodeEditor::indent_selection(bool unindent) {
@@ -319,10 +399,23 @@ void CodeEditor::paint(Painter& p) {
 
   p.save();
   p.clip({a.x, 0, a.w, b.h});
+  // search matches (the selected one is outlined)
+  if (!matches_.empty()) {
+    auto it = std::lower_bound(matches_.begin(), matches_.end(), first,
+                               [](const std::pair<Pos, Pos>& m, std::size_t l) { return m.first.line < l; });
+    for (; it != matches_.end() && it->first.line < last; ++it) {
+      const float y = kTopPad + static_cast<float>(it->first.line) * line_h_ - scroll_.y;
+      const Rect r{x_of(it->first.line, it->first.col), y + 1, std::max(char_w_ * 0.5f, x_of(it->first.line, it->second.col) - x_of(it->first.line, it->first.col)), line_h_ - 2};
+      const bool current = sel && it->first == sa && it->second == sb;
+      p.fill_rect(r, t.warning.with_alpha(current ? 0.45f : 0.22f), 2);
+      if (current) p.stroke_rect(r, t.warning, 1, 2);
+    }
+  }
   for (std::size_t l = first; l < last; ++l) {
     const float y = kTopPad + static_cast<float>(l) * line_h_ - scroll_.y;
     const std::string& line = lines_[l];
     if (show_caret && !sel && l == caret_.line && !read_only_) p.fill_rect({a.x, y, a.w, line_h_}, t.text.with_alpha(0.045f));
+    if (exec_line_ > 0 && l + 1 == static_cast<std::size_t>(exec_line_)) p.fill_rect({a.x, y, a.w, line_h_}, t.warning.with_alpha(0.22f));
     if (sel && l >= sa.line && l <= sb.line) {
       const float x0 = l == sa.line ? x_of(l, sa.col) : a.x + kTextPad - scroll_.x;
       const float x1 = l == sb.line ? x_of(l, sb.col) : x_of(l, line.size()) + char_w_;
@@ -381,6 +474,23 @@ void CodeEditor::paint(Painter& p) {
     }
   }
 
+  // the bracket at the caret and its partner
+  if (show_caret && !sel) {
+    Pos ba, bb;
+    if (bracket_match(ba, bb))
+      for (const Pos& q : {ba, bb}) {
+        const float y = kTopPad + static_cast<float>(q.line) * line_h_ - scroll_.y;
+        const Rect r{x_of(q.line, q.col), y + 1, char_w_, line_h_ - 2};
+        p.fill_rect(r, t.accent.with_alpha(0.16f), 2);
+        p.stroke_rect(r, t.accent.with_alpha(0.55f), 1, 2);
+      }
+  }
+  // Ctrl + hover: the word looks like a link (Ctrl+click asks for its definition)
+  if (link_ && hover_target_ && hovered() && hover_a_.line < lines_.size()) {
+    const float y = kTopPad + static_cast<float>(hover_a_.line + 1) * line_h_ - scroll_.y - 2;
+    p.fill_rect({x_of(hover_a_.line, hover_a_.col), y, x_of(hover_b_.line, hover_b_.col) - x_of(hover_a_.line, hover_a_.col), 1}, t.accent);
+  }
+
   if (show_caret) {
     const float cx = std::round(x_of(caret_.line, caret_.col));
     const float cy = kTopPad + static_cast<float>(caret_.line) * line_h_ - scroll_.y;
@@ -394,6 +504,21 @@ void CodeEditor::paint(Painter& p) {
       const float y = kTopPad + static_cast<float>(l) * line_h_ - scroll_.y;
       const bool cur = l == caret_.line && show_caret;
       p.text({0, y, a.x - 10, line_h_}, std::to_string(l + 1), f, cur ? t.text : t.text_disabled, Align::RightCenter);
+    }
+  }
+  // breakpoints and the execution arrow
+  for (int bl : breakpoints_) {
+    if (bl < 1 || static_cast<std::size_t>(bl) > lines_.size()) continue;
+    const std::size_t l = static_cast<std::size_t>(bl - 1);
+    if (l < first || l >= last) continue;
+    const float y = kTopPad + static_cast<float>(l) * line_h_ - scroll_.y;
+    p.fill_ellipse({3, y + (line_h_ - 11) / 2, 11, 11}, Color::hex(0xE5484D));
+  }
+  if (exec_line_ > 0 && static_cast<std::size_t>(exec_line_) <= lines_.size()) {
+    const std::size_t l = static_cast<std::size_t>(exec_line_ - 1);
+    if (l >= first && l < last) {
+      const float y = kTopPad + static_cast<float>(l) * line_h_ - scroll_.y + line_h_ / 2;
+      p.fill_polygon({{4, y - 5}, {13, y}, {4, y + 5}}, t.warning);
     }
   }
   for (auto& d : diags_) {
@@ -416,6 +541,8 @@ void CodeEditor::paint(Painter& p) {
       if (d.severity == Diagnostic::Error && d.line >= 1)
         p.fill_rect({b.w - 10, (static_cast<float>(d.line) * line_h_ / content_h) * b.h, 8, 2}, t.danger);
   }
+  if (!hint_.signature.empty() && focused()) paint_hint(p);
+  if (!hover_text_.empty() && hovered() && !popup_open_) paint_hover(p);
   if (popup_open_) paint_popup(p);
 }
 
@@ -457,12 +584,75 @@ void CodeEditor::refresh_completion(bool open_if_closed) {
 void CodeEditor::accept_completion() {
   if (!popup_open_ || popup_.items.empty()) return;
   const CompletionItem& it = popup_.items[static_cast<std::size_t>(std::clamp(popup_index_, 0, static_cast<int>(popup_.items.size()) - 1))];
-  const std::string text = it.insert.empty() ? it.label : it.insert;
+  std::string text = it.insert.empty() ? it.label : it.insert;
+  const std::size_t mark = text.find("$0");
+  std::string after;
+  if (mark != std::string::npos) {
+    after = text.substr(mark + 2);
+    text.erase(mark);
+  }
   push_undo(0);
   anchor_ = {caret_.line, popup_.replace_from};
   insert(text);
+  if (!after.empty()) { // the caret stays at the $0 marker
+    const Pos keep = caret_;
+    insert(after);
+    caret_ = anchor_ = keep;
+  }
   popup_open_ = false;
   edited();
+  const bool in_call = caret_.col > 0 && lines_[caret_.line][caret_.col - 1] == '(';
+  refresh_hint(in_call);
+}
+
+// ── parameter hint ───────────────────────────────────────────────────────────
+
+void CodeEditor::refresh_hint(bool open_if_closed) {
+  if (!completion_ || read_only_ || (hint_.signature.empty() && !open_if_closed)) return;
+  CompletionResult r = completion_(lines_, caret_.line, caret_.col);
+  if (r.signature != hint_.signature || r.active_begin != hint_.active_begin) invalidate();
+  hint_.signature = std::move(r.signature);
+  hint_.active_begin = r.active_begin;
+  hint_.active_end = r.active_end;
+}
+
+void CodeEditor::close_hint() {
+  if (hint_.signature.empty()) return;
+  hint_.signature.clear();
+  invalidate();
+}
+
+void CodeEditor::paint_hint(Painter& p) {
+  const Theme& t = th();
+  const std::string& s = hint_.signature;
+  const std::size_t b = std::min(hint_.active_begin, s.size()), e = std::clamp(hint_.active_end, b, s.size());
+  const std::string pre = s.substr(0, b), act = s.substr(b, e - b), post = s.substr(e);
+  Font bold = t.font_mono;
+  bold.weight = FontWeight::Bold;
+  const float w0 = measure_text(pre, t.font_mono, 0).w, w1 = measure_text(act, bold, 0).w,
+              w2 = measure_text(post, t.font_mono, 0).w;
+  const float w = w0 + w1 + w2 + 20, h = line_h_ + 6;
+  const Rect bb = bounds();
+  const float line_top = kTopPad + static_cast<float>(caret_.line) * line_h_ - scroll_.y;
+  const float above = line_top - h - 2, below = line_top + line_h_ + 2;
+  float y = above;
+  if (popup_open_) {
+    const Rect pr = popup_rect();
+    if (pr.y < line_top) y = below; // the popup is above the line: the hint goes below
+  } else if (above < 2) {
+    y = below;
+  }
+  const float x = std::clamp(x_of(caret_.line, caret_.col) - 40, 4.f, std::max(4.f, bb.w - w - 12));
+  const Rect r{x, y, w, h};
+  p.fill_rect(r.outset(2).translated(0, 2), t.shadow.with_alpha(0.2f), t.radius + 2);
+  p.fill_rect(r, t.surface_alt, t.radius_small);
+  p.stroke_rect(r, t.border, 1, t.radius_small);
+  float cx = x + 10;
+  p.text({cx, y, w0 + 2, h}, pre, t.font_mono, t.text_dim, Align::LeftCenter);
+  cx += w0;
+  p.text({cx, y, w1 + 2, h}, act, bold, t.accent, Align::LeftCenter);
+  cx += w1;
+  p.text({cx, y, w2 + 2, h}, post, t.font_mono, t.text_dim, Align::LeftCenter);
 }
 
 Rect CodeEditor::popup_rect() const {
@@ -517,7 +707,10 @@ void CodeEditor::paint_popup(Painter& p) {
 // ── input ────────────────────────────────────────────────────────────────────
 
 void CodeEditor::on_focus(bool f) {
-  if (!f) popup_open_ = false;
+  if (!f) {
+    popup_open_ = false;
+    hint_.signature.clear();
+  }
   invalidate();
 }
 
@@ -526,6 +719,7 @@ bool CodeEditor::on_event(InputEvent& e) {
   const Rect b = bounds();
   switch (e.type) {
     case InputEvent::Wheel: {
+      hide_hover();
       if (popup_open_ && popup_rect().contains(e.pos)) {
         popup_scroll_ = std::clamp(popup_scroll_ - static_cast<int>(e.wheel_dy * 3), 0,
                                    std::max(0, static_cast<int>(popup_.items.size()) - kPopupRows));
@@ -550,6 +744,18 @@ bool CodeEditor::on_event(InputEvent& e) {
         }
         close_completion();
       }
+      close_hint();
+      hide_hover();
+      if (e.button == MouseButton::Right) {
+        // the context menu acts on what was clicked: move the caret there,
+        // unless the click is inside the selection (Copy / Cut keep working)
+        if (e.pos.x >= text_area().x) {
+          const Pos at = char_at(e.pos);
+          const auto [s0, s1] = selection();
+          if (!has_selection() || at < s0 || s1 < at) move_caret(at, false);
+        }
+        return true;
+      }
       if (e.button != MouseButton::Left) return true;
       const float content_h = static_cast<float>(lines_.size()) * line_h_ + kTopPad * 2 + line_h_ * 3;
       if (e.pos.x > b.w - 12 && content_h > b.h) { // scrollbar
@@ -561,6 +767,16 @@ bool CodeEditor::on_event(InputEvent& e) {
         return true;
       }
       Pos p = pos_at(e.pos);
+      if (gutter_clicks_ && e.pos.x < text_area().x) { // a click in the gutter toggles a breakpoint
+        breakpoint_toggled.emit(static_cast<int>(p.line) + 1);
+        return true;
+      }
+      if (e.clicks == 1 && (e.mods & Mod::Primary) && !(e.mods & Mod::Shift) && e.pos.x >= text_area().x) {
+        const Pos at = char_at(e.pos); // Ctrl+click: "go to definition" is the application's job
+        move_caret(at, false);
+        definition_requested.emit(at.line, at.col);
+        return true;
+      }
       if (e.clicks >= 2) { // select word
         const std::string& s = lines_[p.line];
         std::size_t a0 = p.col, a1 = p.col;
@@ -587,15 +803,55 @@ bool CodeEditor::on_event(InputEvent& e) {
         move_caret(pos_at(e.pos), true);
         return true;
       }
-      cursor_ = e.pos.x < text_area().x || e.pos.x > b.w - 12 ? Cursor::Arrow : Cursor::IBeam;
+      track_hover(e);
       return false;
     case InputEvent::MouseUp:
       selecting_ = dragging_thumb_ = false;
       return true;
     case InputEvent::Text: {
       if (read_only_) return true;
+      hide_hover();
+      bool paired = false;
+      std::string typed = e.text;
+      if (auto_close_ && typed.size() == 1) {
+        const char ch = typed[0];
+        const std::string& l = lines_[caret_.line];
+        const char next = caret_.col < l.size() ? l[caret_.col] : 0;
+        const char prev = caret_.col > 0 ? l[caret_.col - 1] : 0;
+        const bool opener = ch == '(' || ch == '[' || ch == '{';
+        const bool quote = ch == '"' || ch == '\'';
+        const char closer = ch == '(' ? ')' : ch == '[' ? ']' : ch == '{' ? '}' : ch;
+        if ((ch == ')' || ch == ']' || ch == '}' || quote) && !has_selection() && next == ch) { // step over
+          move_caret({caret_.line, caret_.col + 1}, false);
+          close_completion();
+          return true;
+        }
+        if ((opener || quote) && has_selection()) { // wrap the selection
+          push_undo(0);
+          insert(std::string(1, ch) + selected_text() + closer);
+          edited();
+          return true;
+        }
+        if (opener || quote) {
+          const bool free_after = next == 0 || next == ' ' || next == ')' || next == ']' || next == '}' || next == ';' || next == ',';
+          bool in_string = false;
+          if (quote)
+            for (std::size_t i = 0; i < caret_.col; ++i) {
+              if (l[i] == '\\') { ++i; continue; }
+              if (l[i] == ch) in_string = !in_string;
+            }
+          if (free_after && !(quote && (is_word(prev) || in_string))) {
+            typed += closer;
+            paired = true;
+          }
+        }
+      }
       push_undo(1);
-      insert(e.text);
+      insert(typed);
+      if (paired) {
+        --caret_.col;
+        anchor_ = caret_;
+      }
       edited();
       // open on '.', '->', '::', '"' and after two identifier characters; refilter while open
       const std::string& l = lines_[caret_.line];
@@ -606,6 +862,7 @@ bool CodeEditor::on_event(InputEvent& e) {
                            (c == ':' && caret_.col >= 2 && l[caret_.col - 2] == ':') || (is_word(c) && caret_.col - w >= 2);
       if (is_word(c) || trigger) refresh_completion(trigger);
       else close_completion();
+      refresh_hint(c == '(' || c == ',');
       return true;
     }
     case InputEvent::KeyDown:
@@ -617,6 +874,12 @@ bool CodeEditor::on_event(InputEvent& e) {
   // ── keys ──
   const bool shift = (e.mods & Mod::Shift) != 0;
   const bool primary = e.primary();
+  hide_hover();
+  if (e.key == Key::Enter && (e.mods & Mod::Alt)) return false; // left to the application (quick actions)
+  if (primary && e.key == Key::Slash && !comment_.empty() && !read_only_) {
+    toggle_comment();
+    return true;
+  }
   if (primary && e.key == Key::Space) {
     open_completion();
     return true;
@@ -630,7 +893,7 @@ bool CodeEditor::on_event(InputEvent& e) {
       case Key::PageDown: popup_index_ = std::min(n - 1, popup_index_ + kPopupRows); invalidate(); return true;
       case Key::Enter:
       case Key::Tab: accept_completion(); return true;
-      case Key::Escape: close_completion(); return true;
+      case Key::Escape: close_completion(); close_hint(); return true;
       case Key::Backspace: break; // handled below, then refiltered
       default:
         if (e.key == Key::Left || e.key == Key::Right || e.key == Key::Home || e.key == Key::End) close_completion();
@@ -696,21 +959,13 @@ bool CodeEditor::on_event(InputEvent& e) {
       return true;
     case Key::A:
       if (!primary) return !read_only_;
-      anchor_ = {0, 0};
-      caret_ = {lines_.size() - 1, lines_.back().size()};
-      invalidate();
+      select_all();
       return true;
     case Key::C:
     case Key::X:
       if (!primary) return !read_only_;
-      if (has_selection()) {
-        App::set_clipboard(selected_text());
-        if (e.key == Key::X && !read_only_) {
-          push_undo(0);
-          erase_selection();
-          edited();
-        }
-      }
+      if (e.key == Key::X) cut();
+      else copy();
       return true;
     default:
       break;
@@ -720,25 +975,13 @@ bool CodeEditor::on_event(InputEvent& e) {
   switch (e.key) {
     case Key::V:
       if (!primary) return true;
-      push_undo(0);
-      insert(App::clipboard());
-      edited();
+      paste();
       return true;
     case Key::Z:
     case Key::Y: {
       if (!primary) return true;
-      const bool redo = e.key == Key::Y || shift;
-      auto& from = redo ? redo_ : undo_;
-      auto& to = redo ? undo_ : redo_;
-      if (from.empty()) return true;
-      to.push_back({lines_, caret_, anchor_});
-      Snapshot s = std::move(from.back());
-      from.pop_back();
-      lines_ = std::move(s.lines);
-      caret_ = s.caret;
-      anchor_ = s.anchor;
-      last_edit_kind_ = 0;
-      edited();
+      if (e.key == Key::Y || shift) redo();
+      else undo();
       return true;
     }
     case Key::Enter: {
@@ -748,9 +991,20 @@ bool CodeEditor::on_event(InputEvent& e) {
       std::string indent(first_non_space(line), ' ');
       const std::string before = line.substr(0, caret_.col);
       const auto last_char = before.find_last_not_of(' ');
-      if (last_char != std::string::npos && (before[last_char] == '{' || before[last_char] == '(' || before[last_char] == ':'))
-        indent += "    ";
+      const bool opened = last_char != std::string::npos &&
+                          (before[last_char] == '{' || before[last_char] == '(' || before[last_char] == ':');
+      const bool closes = opened && caret_.col < line.size() &&
+                          ((before[last_char] == '{' && line[caret_.col] == '}') ||
+                           (before[last_char] == '(' && line[caret_.col] == ')'));
+      const std::string outer = indent;
+      if (opened) indent += "    ";
       insert("\n" + indent);
+      if (closes) { // {|} -> the closing brace moves to its own line below the caret
+        const Pos keep = caret_;
+        insert("\n" + outer);
+        caret_ = anchor_ = keep;
+      }
+      close_hint();
       edited();
       return true;
     }
@@ -770,7 +1024,14 @@ bool CodeEditor::on_event(InputEvent& e) {
         const std::size_t fns = first_non_space(line);
         std::size_t from = prev_cp(line, caret_.col);
         if (caret_.col <= fns && caret_.col >= 1) from = caret_.col - ((caret_.col - 1) % 4 + 1);
-        line.erase(from, caret_.col - from);
+        std::size_t to = caret_.col;
+        if (auto_close_ && to < line.size()) { // (|) -> |
+          const char o = line[to - 1], c = line[to];
+          if ((o == '(' && c == ')') || (o == '[' && c == ']') || (o == '{' && c == '}') || (o == '"' && c == '"') ||
+              (o == '\'' && c == '\''))
+            ++to;
+        }
+        line.erase(from, to - from);
         caret_.col = from;
         anchor_ = caret_;
       } else if (caret_.line > 0) {
@@ -781,6 +1042,7 @@ bool CodeEditor::on_event(InputEvent& e) {
       }
       edited();
       refresh_completion(false);
+      refresh_hint(false);
       return true;
     }
     case Key::Delete: {
@@ -797,11 +1059,295 @@ bool CodeEditor::on_event(InputEvent& e) {
       return true;
     }
     case Key::Escape:
-      return false;
+      if (hint_.signature.empty()) return false;
+      close_hint();
+      return true;
     default:
       // printable keys arrive as Text events; keep them from triggering shortcuts
       return !primary && !(e.mods & Mod::Alt) && e.key >= Key::A && e.key <= Key::Num9;
   }
+}
+
+// ── ranges, comments, search ─────────────────────────────────────────────────
+
+void CodeEditor::select(std::size_t l0, std::size_t c0, std::size_t l1, std::size_t c1) {
+  metrics();
+  auto at = [&](std::size_t l, std::size_t c) {
+    Pos q;
+    q.line = std::min(l, lines_.size() - 1);
+    q.col = std::min(c, lines_[q.line].size());
+    return q;
+  };
+  anchor_ = at(l0, c0);
+  caret_ = at(l1, c1);
+  preferred_col_cp_ = cp_count(std::string_view(lines_[caret_.line]).substr(0, caret_.col));
+  ensure_visible();
+  invalidate();
+}
+
+void CodeEditor::replace_range(std::size_t l0, std::size_t c0, std::size_t l1, std::size_t c1, std::string_view text) {
+  if (read_only_) return;
+  push_undo(0);
+  select(l0, c0, l1, c1);
+  insert(text);
+  edited();
+}
+
+void CodeEditor::replace_all_text(std::string_view text) {
+  auto lines = split_lines(text);
+  if (lines == lines_) return;
+  push_undo(0);
+  lines_ = std::move(lines);
+  caret_.line = std::min(caret_.line, lines_.size() - 1);
+  caret_.col = std::min(caret_.col, lines_[caret_.line].size());
+  anchor_ = caret_;
+  edited();
+}
+
+std::pair<std::size_t, std::size_t> CodeEditor::word_range(std::size_t line, std::size_t col) const {
+  if (line >= lines_.size()) return {0, 0};
+  const std::string& s = lines_[line];
+  std::size_t a = std::min(col, s.size()), b = a;
+  while (a > 0 && is_word(s[a - 1])) --a;
+  while (b < s.size() && is_word(s[b])) ++b;
+  return {a, b};
+}
+
+std::string CodeEditor::word_at(std::size_t line, std::size_t col) const {
+  if (line >= lines_.size()) return {};
+  const auto [a, b] = word_range(line, col);
+  return lines_[line].substr(a, b - a);
+}
+
+CodeEditor::Pos CodeEditor::char_at(Point p) const {
+  const float fy = (p.y + scroll_.y - kTopPad) / line_h_;
+  Pos r;
+  r.line = static_cast<std::size_t>(std::clamp(static_cast<int>(std::floor(fy)), 0, static_cast<int>(lines_.size()) - 1));
+  const float fx = (p.x - text_area().x - kTextPad + scroll_.x) / char_w_;
+  r.col = byte_of_cp(lines_[r.line], static_cast<std::size_t>(std::max(0, static_cast<int>(std::floor(fx)))));
+  return r;
+}
+
+void CodeEditor::toggle_comment() {
+  if (comment_.empty() || read_only_) return;
+  auto [a, b] = selection();
+  const std::size_t last = (b.col == 0 && b.line > a.line) ? b.line - 1 : b.line;
+  bool all = true, any = false;
+  std::size_t indent = std::string::npos;
+  for (std::size_t l = a.line; l <= last; ++l) {
+    const std::string& line = lines_[l];
+    const std::size_t fns = first_non_space(line);
+    if (fns == line.size()) continue;
+    any = true;
+    indent = std::min(indent, fns);
+    if (line.compare(fns, comment_.size(), comment_) != 0) all = false;
+  }
+  if (!any) return;
+  push_undo(0);
+  auto shift = [&](std::size_t l, std::size_t at, long delta) {
+    for (Pos* q : {&caret_, &anchor_})
+      if (q->line == l && q->col >= at)
+        q->col = static_cast<std::size_t>(std::max(static_cast<long>(at), static_cast<long>(q->col) + delta));
+  };
+  for (std::size_t l = a.line; l <= last; ++l) {
+    std::string& line = lines_[l];
+    const std::size_t fns = first_non_space(line);
+    if (fns == line.size()) continue;
+    if (all) {
+      std::size_t n = comment_.size();
+      if (fns + n < line.size() && line[fns + n] == ' ') ++n;
+      line.erase(fns, n);
+      shift(l, fns, -static_cast<long>(n));
+    } else {
+      line.insert(indent, comment_ + " ");
+      shift(l, indent, static_cast<long>(comment_.size() + 1));
+    }
+  }
+  edited();
+}
+
+void CodeEditor::set_search(std::string query, bool match_case, bool whole_word) {
+  search_ = std::move(query);
+  search_case_ = match_case;
+  search_word_ = whole_word;
+  update_matches();
+  invalidate();
+}
+
+void CodeEditor::update_matches() {
+  matches_.clear();
+  if (search_.empty() || search_.find('\n') != std::string::npos) return;
+  auto low = [](std::string x) {
+    for (auto& c : x) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return x;
+  };
+  const std::string q = search_case_ ? search_ : low(search_);
+  for (std::size_t l = 0; l < lines_.size(); ++l) {
+    const std::string line = search_case_ ? lines_[l] : low(lines_[l]);
+    for (std::size_t at = line.find(q); at != std::string::npos; at = line.find(q, at + q.size())) {
+      if (search_word_ && ((at > 0 && is_word(line[at - 1])) || (at + q.size() < line.size() && is_word(line[at + q.size()]))))
+        continue;
+      matches_.push_back({{l, at}, {l, at + q.size()}});
+      if (matches_.size() >= 20000) return;
+    }
+  }
+}
+
+int CodeEditor::search_current() const {
+  if (!has_selection()) return -1;
+  const auto [a, b] = selection();
+  for (std::size_t i = 0; i < matches_.size(); ++i)
+    if (matches_[i].first == a && matches_[i].second == b) return static_cast<int>(i);
+  return -1;
+}
+
+bool CodeEditor::find_next(bool backwards, bool include_current) {
+  if (matches_.empty()) return false;
+  const auto [a, b] = selection();
+  std::size_t idx = backwards ? matches_.size() - 1 : 0;
+  if (!backwards) {
+    for (std::size_t i = 0; i < matches_.size(); ++i)
+      if (!(matches_[i].first < (include_current ? a : b))) { idx = i; break; }
+  } else {
+    for (std::size_t i = matches_.size(); i-- > 0;)
+      if (matches_[i].first < a) { idx = i; break; }
+  }
+  anchor_ = matches_[idx].first;
+  caret_ = matches_[idx].second;
+  ensure_visible();
+  invalidate();
+  return true;
+}
+
+bool CodeEditor::replace_current(std::string_view with) {
+  if (read_only_) return false;
+  if (search_current() < 0) {
+    find_next();
+    return false;
+  }
+  std::string w(with);
+  std::erase(w, '\n');
+  push_undo(0);
+  insert(w);
+  edited();
+  find_next();
+  return true;
+}
+
+std::size_t CodeEditor::replace_all(std::string_view with) {
+  if (read_only_ || matches_.empty()) return 0;
+  std::string w(with);
+  std::erase(w, '\n');
+  push_undo(0);
+  const std::size_t n = matches_.size();
+  for (auto it = matches_.rbegin(); it != matches_.rend(); ++it)
+    lines_[it->first.line].replace(it->first.col, it->second.col - it->first.col, w);
+  caret_.col = std::min(caret_.col, lines_[caret_.line].size());
+  anchor_ = caret_;
+  edited();
+  return n;
+}
+
+bool CodeEditor::bracket_match(Pos& a, Pos& b) const {
+  const std::string& s = lines_[caret_.line];
+  auto try_at = [&](std::size_t col) -> bool {
+    if (col >= s.size()) return false;
+    static const std::string opens = "([{", closes = ")]}";
+    const char c = s[col];
+    const auto o = opens.find(c), cl = closes.find(c);
+    if (o == std::string::npos && cl == std::string::npos) return false;
+    const bool fwd = o != std::string::npos;
+    const char other = fwd ? closes[o] : opens[cl];
+    int depth = 0;
+    std::size_t l = caret_.line;
+    long i = static_cast<long>(col);
+    for (int scanned = 0; scanned < 3000; ++scanned) {
+      const std::string& t = lines_[l];
+      for (; fwd ? i < static_cast<long>(t.size()) : i >= 0; fwd ? ++i : --i) {
+        const char x = t[static_cast<std::size_t>(i)];
+        if (x == c) ++depth;
+        else if (x == other && --depth == 0) {
+          a = {caret_.line, col};
+          b = {l, static_cast<std::size_t>(i)};
+          return true;
+        }
+      }
+      if (fwd) {
+        if (++l >= lines_.size()) return false;
+        i = 0;
+      } else {
+        if (l == 0) return false;
+        --l;
+        i = static_cast<long>(lines_[l].size()) - 1;
+      }
+    }
+    return false;
+  };
+  return try_at(caret_.col) || (caret_.col > 0 && try_at(caret_.col - 1));
+}
+
+// ── hover ────────────────────────────────────────────────────────────────────
+
+void CodeEditor::hide_hover() {
+  hover_timer_.reset();
+  hover_target_ = false;
+  if (!hover_text_.empty() || link_) {
+    hover_text_.clear();
+    invalidate();
+  }
+}
+
+void CodeEditor::track_hover(const InputEvent& e) {
+  const Rect b = bounds();
+  const bool in_text = e.pos.x >= text_area().x && e.pos.x < b.w - 12 &&
+                       e.pos.y < kTopPad + static_cast<float>(lines_.size()) * line_h_ - scroll_.y;
+  const Pos p = char_at(e.pos);
+  const auto [wa, wb] = in_text ? word_range(p.line, p.col) : std::pair<std::size_t, std::size_t>{0, 0};
+  const bool over = in_text && wb > wa && p.col >= wa && p.col < wb;
+  const bool link = over && (e.mods & Mod::Primary) != 0;
+  if (link != link_) {
+    link_ = link;
+    invalidate();
+  }
+  cursor_ = link ? Cursor::Hand : (e.pos.x < text_area().x || e.pos.x > b.w - 12 ? Cursor::Arrow : Cursor::IBeam);
+  if (!over) {
+    hide_hover();
+    return;
+  }
+  const Pos na{p.line, wa}, nb{p.line, wb};
+  if (hover_target_ && na == hover_a_ && nb == hover_b_) return;
+  hide_hover();
+  hover_target_ = true;
+  hover_a_ = na;
+  hover_b_ = nb;
+  if (link_) invalidate();
+  if (!hover_) return;
+  std::weak_ptr<bool> alive = alive_;
+  const std::size_t col = p.col;
+  hover_timer_ = App::after(std::chrono::milliseconds(450), [this, alive, na, col] {
+    if (alive.expired() || !hover_target_ || !(hover_a_ == na) || popup_open_) return;
+    hover_text_ = hover_(lines_, na.line, col);
+    invalidate();
+  });
+}
+
+void CodeEditor::paint_hover(Painter& p) {
+  const Theme& t = th();
+  Font f = t.font_mono;
+  f.size = t.font_small.size + 0.5f;
+  const Rect bb = bounds();
+  const float maxw = std::max(120.f, std::min(560.f, bb.w - 24));
+  const Size ts = measure_text(hover_text_, f, maxw);
+  const float w = ts.w + 20, h = ts.h + 12;
+  const float line_top = kTopPad + static_cast<float>(hover_a_.line) * line_h_ - scroll_.y;
+  float y = line_top + line_h_ + 3;
+  if (y + h > bb.h - 4) y = line_top - h - 3;
+  const float x = std::clamp(x_of(hover_a_.line, hover_a_.col) - 8, 4.f, std::max(4.f, bb.w - w - 12));
+  const Rect r{x, y, w, h};
+  p.fill_rect(r.outset(2).translated(0, 2), t.shadow.with_alpha(0.2f), t.radius + 2);
+  p.fill_rect(r, t.surface, t.radius_small);
+  p.stroke_rect(r, t.border, 1, t.radius_small);
+  p.text(r.inset(Insets(10, 6)), hover_text_, f, t.text, Align::LeftCenter, true);
 }
 
 } // namespace pulseui

@@ -117,6 +117,23 @@ void D2DPainter::fill_polygon(const std::vector<Point>& pts, Color c) {
   if (g) rt_->FillGeometry(g.get(), brush(c));
 }
 
+void D2DPainter::fill_path(const std::vector<std::vector<Point>>& contours, Color c, bool even_odd) {
+  Com<ID2D1PathGeometry> geo;
+  factories().d2d->CreatePathGeometry(geo.put());
+  if (!geo) return;
+  Com<ID2D1GeometrySink> sink;
+  geo->Open(sink.put());
+  sink->SetFillMode(even_odd ? D2D1_FILL_MODE_ALTERNATE : D2D1_FILL_MODE_WINDING);
+  for (auto& pts : contours) {
+    if (pts.size() < 3) continue;
+    sink->BeginFigure(D2D1::Point2F(pts[0].x, pts[0].y), D2D1_FIGURE_BEGIN_FILLED);
+    for (std::size_t i = 1; i < pts.size(); ++i) sink->AddLine(D2D1::Point2F(pts[i].x, pts[i].y));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+  }
+  sink->Close();
+  rt_->FillGeometry(geo.get(), brush(c));
+}
+
 void D2DPainter::fill_gradient(const Rect& r, Color top, Color bottom, float radius) {
   D2D1_GRADIENT_STOP stops[2] = {{0.f, cf(top, opacity_)}, {1.f, cf(bottom, opacity_)}};
   Com<ID2D1GradientStopCollection> coll;

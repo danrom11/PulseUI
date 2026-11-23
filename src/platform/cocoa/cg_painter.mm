@@ -212,6 +212,19 @@ void CGPainter::fill_polygon(const std::vector<Point>& pts, Color c) {
   CGContextFillPath(ctx_);
 }
 
+void CGPainter::fill_path(const std::vector<std::vector<Point>>& contours, Color c, bool even_odd) {
+  CGContextSetRGBFillColor(ctx_, c.r, c.g, c.b, c.a);
+  CGContextBeginPath(ctx_);
+  for (auto& pts : contours) {
+    if (pts.size() < 3) continue;
+    CGContextMoveToPoint(ctx_, pts[0].x, pts[0].y);
+    for (std::size_t i = 1; i < pts.size(); ++i) CGContextAddLineToPoint(ctx_, pts[i].x, pts[i].y);
+    CGContextClosePath(ctx_);
+  }
+  if (even_odd) CGContextEOFillPath(ctx_);
+  else CGContextFillPath(ctx_);
+}
+
 void CGPainter::fill_gradient(const Rect& r, Color top, Color bottom, float radius) {
   const CGFloat comps[8] = {top.r, top.g, top.b, top.a, bottom.r, bottom.g, bottom.b, bottom.a};
   const CGFloat locs[2] = {0, 1};

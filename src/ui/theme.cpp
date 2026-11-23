@@ -104,8 +104,19 @@ Shortcut Shortcut::parse(std::string_view s) {
     else if (tok == "right") sc.key = Key::Right;
     else if (tok == "home") sc.key = Key::Home;
     else if (tok == "end") sc.key = Key::End;
+    else if (tok == "pageup") sc.key = Key::PageUp;
+    else if (tok == "pagedown") sc.key = Key::PageDown;
+    else if (tok == "insert" || tok == "ins") sc.key = Key::Insert;
+    else if (tok == "/" || tok == "slash") sc.key = Key::Slash;
+    else if (tok == "menu" || tok == "apps") sc.key = Key::Menu;
     if (plus == std::string_view::npos) break;
     start = plus + 1;
+  }
+  // a modifier on its own: "Alt", "Shift", "Ctrl"
+  if (sc.key == Key::Unknown) {
+    if (sc.mods == Mod::Alt) sc.key = Key::Alt;
+    else if (sc.mods == Mod::Shift) sc.key = Key::Shift;
+    else if (sc.mods == Mod::Ctrl) sc.key = Key::Control;
   }
   return sc;
 }

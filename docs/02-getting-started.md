@@ -22,7 +22,7 @@ project(HelloPulseUI CXX)
 set(CMAKE_CXX_STANDARD 20)
 
 include(FetchContent)
-FetchContent_Declare(pulseui URL https://github.com/danrom11/PulseUI/archive/0.3.0.tar.gz)
+FetchContent_Declare(pulseui URL https://github.com/danrom11/PulseUI/archive/0.4.0.tar.gz)
 FetchContent_MakeAvailable(pulseui)
 
 pulseui_add_app(hello main.cpp)

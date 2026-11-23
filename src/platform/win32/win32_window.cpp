@@ -7,6 +7,15 @@
 #include "win32_common.hpp"
 
 namespace pulseui::platform {
+namespace win32 {
+void* register_drop(HWND hwnd, std::function<bool(Window::DragPhase, Point, const DragData&)> fn);
+void unregister_drop(HWND hwnd, void* target);
+// win32_uia.cpp
+void* uia_create(HWND hwnd, Window* owner);
+LRESULT uia_get_object(void* host, HWND hwnd, WPARAM w, LPARAM l);
+void uia_focus_changed(void* host, View* v);
+void uia_destroy(void* host, HWND hwnd);
+} // namespace win32
 using namespace win32;
 
 namespace {
@@ -56,6 +65,8 @@ Key map_vk(WPARAM vk) {
     case VK_MENU: return Key::Alt;
     case VK_LWIN:
     case VK_RWIN: return Key::Super;
+    case VK_OEM_2: return Key::Slash;
+    case VK_APPS: return Key::Menu;
     default: return Key::Unknown;
   }
 }
@@ -92,11 +103,11 @@ public:
     }
     const float s = dpi_for(nullptr) / 96.f;
     RECT rc{0, 0, static_cast<LONG>(cfg.width * s), static_cast<LONG>(cfg.height * s)};
-    AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    AdjustWindowRectEx(&rc, style_, FALSE, 0);
     const int ww = rc.right - rc.left, wh = rc.bottom - rc.top;
     const int sx = (GetSystemMetrics(SM_CXSCREEN) - ww) / 2;
     const int sy = (GetSystemMetrics(SM_CYSCREEN) - wh) / 2;
-    hwnd_ = CreateWindowExW(0, L"PulseUIWindow", widen(cfg.title).c_str(), WS_OVERLAPPEDWINDOW,
+    hwnd_ = CreateWindowExW(0, L"PulseUIWindow", widen(cfg.title).c_str(), style_,
                             std::max(0, sx), std::max(0, sy), ww, wh, nullptr, nullptr,
                             GetModuleHandleW(nullptr), this);
     // dark title bar when available (Windows 10 2004+ / 11)
@@ -108,13 +119,60 @@ public:
         fn(hwnd_, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &dark, sizeof dark);
       }
     }
+    drop_ = register_drop(hwnd_, [this](Window::DragPhase phase, Point p, const DragData& d) {
+      return owner_ ? owner_->handle_drag(phase, p, d) : false;
+    });
   }
 
   ~Win32Window() override {
     if (hwnd_) {
       owner_ = nullptr;
+      release_modal();
       DestroyWindow(hwnd_);
     }
+  }
+
+  void set_resizable(bool r) override {
+    style_ = r ? WS_OVERLAPPEDWINDOW : (WS_OVERLAPPEDWINDOW & ~(WS_THICKFRAME | WS_MAXIMIZEBOX));
+    const Size s = size();
+    const LONG_PTR visible = IsWindowVisible(hwnd_) ? WS_VISIBLE : 0;
+    SetWindowLongPtrW(hwnd_, GWL_STYLE, static_cast<LONG_PTR>(style_) | visible);
+    set_size(s.w, s.h);
+    SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+
+  void set_modal_parent(NativeWindow* parent) override {
+    release_modal();
+    HWND p = parent ? static_cast<HWND>(parent->handle()) : nullptr;
+    SetWindowLongPtrW(hwnd_, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(p)); // owned: stays above the parent
+    if (!p) return;
+    modal_parent_ = p;
+    RECT pr{}, wr{};
+    GetWindowRect(p, &pr);
+    GetWindowRect(hwnd_, &wr);
+    const int w = wr.right - wr.left, h = wr.bottom - wr.top;
+    const int x = pr.left + ((pr.right - pr.left) - w) / 2;
+    const int y = pr.top + std::max(0L, ((pr.bottom - pr.top) - h) / 3);
+    SetWindowPos(hwnd_, nullptr, x, std::max(0, y), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    EnableWindow(p, FALSE);
+  }
+
+  void activate() override {
+    if (hwnd_) SetForegroundWindow(hwnd_);
+  }
+
+  void a11y_focus_changed(View* v) override {
+    if (uia_) uia_focus_changed(uia_, v);
+  }
+
+  // The owner must be enabled again before this window goes away, or Windows
+  // activates some other application.
+  void release_modal() {
+    if (!modal_parent_) return;
+    HWND p = modal_parent_;
+    modal_parent_ = nullptr;
+    EnableWindow(p, TRUE);
+    if (hwnd_ && GetActiveWindow() == hwnd_) SetActiveWindow(p);
   }
 
   void set_title(const std::string& t) override { SetWindowTextW(hwnd_, widen(t).c_str()); }
@@ -122,7 +180,7 @@ public:
   void set_size(float w, float h) override {
     const float s = scale();
     RECT rc{0, 0, static_cast<LONG>(w * s), static_cast<LONG>(h * s)};
-    AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+    AdjustWindowRectEx(&rc, style_, FALSE, 0);
     SetWindowPos(hwnd_, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
   }
@@ -140,6 +198,7 @@ public:
   }
   void hide() override { ShowWindow(hwnd_, SW_HIDE); }
   void destroy() override {
+    release_modal();
     if (hwnd_) DestroyWindow(hwnd_);
   }
   void invalidate() override {
@@ -222,7 +281,7 @@ private:
             D2DPainter p(rt_.get(), cache_);
             owner_->handle_paint(p);
           }
-          if (rt_->EndDraw() == D2DERR_RECREATE_TARGET) rt_.reset();
+          if (rt_->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) rt_.reset();
         }
         EndPaint(hwnd_, &ps);
         return 0;
@@ -245,7 +304,7 @@ private:
         auto* mm = reinterpret_cast<MINMAXINFO*>(l);
         const float s = scale();
         RECT rc{0, 0, static_cast<LONG>(min_.w * s), static_cast<LONG>(min_.h * s)};
-        AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
+        AdjustWindowRectEx(&rc, style_, FALSE, 0);
         mm->ptMinTrackSize.x = std::max<LONG>(mm->ptMinTrackSize.x, rc.right - rc.left);
         mm->ptMinTrackSize.y = std::max<LONG>(mm->ptMinTrackSize.y, rc.bottom - rc.top);
         return 0;
@@ -326,8 +385,24 @@ private:
         return 0;
       }
       case WM_CLOSE:
-        if (!owner_ || owner_->handle_close_request()) DestroyWindow(hwnd_);
+        if (!owner_ || owner_->handle_close_request()) {
+          release_modal();
+          DestroyWindow(hwnd_);
+        }
         return 0;
+      case WM_DESTROY:
+        unregister_drop(hwnd_, drop_);
+        drop_ = nullptr;
+        if (uia_) uia_destroy(uia_, hwnd_);
+        uia_ = nullptr;
+        break;
+      case WM_GETOBJECT:
+        // UI Automation asks for the window's element tree
+        if (static_cast<long>(l) == -25 /*UiaRootObjectId*/ && owner_) {
+          if (!uia_) uia_ = uia_create(hwnd_, owner_);
+          return uia_get_object(uia_, hwnd_, w, l);
+        }
+        break;
       case WM_NCDESTROY: {
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
         hwnd_ = nullptr;
@@ -343,6 +418,10 @@ private:
 
   Window* owner_;
   HWND hwnd_ = nullptr;
+  HWND modal_parent_ = nullptr;
+  void* drop_ = nullptr; // OLE drop target
+  void* uia_ = nullptr;  // UI Automation providers
+  DWORD style_ = WS_OVERLAPPEDWINDOW;
   Com<ID2D1HwndRenderTarget> rt_;
   BitmapCache cache_;
   Cursor cursor_ = Cursor::Arrow;

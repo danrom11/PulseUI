@@ -3,11 +3,128 @@
 #include <algorithm>
 #include <cctype>
 #include <pulseui/ui/meta.hpp>
+#include <pulseui/ui/theme.hpp>
+
+#include <limits>
 
 #include <fstream>
 #include <sstream>
 
 namespace pulseui {
+
+// ── ForEachTemplate ──────────────────────────────────────────────────────────
+
+Size ForEachTemplate::row_size(Size avail) {
+  float w = 0, h = 0;
+  for (std::size_t i = 0; i < children_.size(); ++i) {
+    if (!children_[i]->is_visible()) continue;
+    const Size s = children_[i]->measure({avail.w, std::numeric_limits<float>::infinity()});
+    w = std::max(w, s.w);
+    h += s.h + (h > 0 ? 4 : 0);
+  }
+  if (children_.empty()) return {200, 32};
+  return {w, h};
+}
+
+Size ForEachTemplate::measure_content(Size avail) {
+  const Size r = row_size(avail);
+  const float n = static_cast<float>(std::max(1, preview_rows));
+  if (horizontal) return {r.w * n + spacing * (n - 1), r.h};
+  return {r.w, r.h * n + spacing * (n - 1)};
+}
+
+void ForEachTemplate::layout() {
+  const Rect c = content_rect();
+  const Size r = row_size({c.w, c.h});
+  const float row_w = horizontal ? r.w : c.w;
+  float y = c.y;
+  for (auto& ch : children_) {
+    if (!ch->is_visible()) continue;
+    const Size s = ch->measure({row_w, std::numeric_limits<float>::infinity()});
+    ch->set_frame({c.x, y, row_w, s.h});
+    ch->layout();
+    y += s.h + 4;
+  }
+}
+
+void ForEachTemplate::paint_content(Painter& p) {
+  if (!children_.empty()) return;
+  const Theme& t = th();
+  const Rect c = content_rect();
+  p.stroke_rect(c.inset(1), t.border, 1, t.radius_small);
+  p.text(c, "ForEach: drop a row here", t.font_small, t.text_dim, Align::Center);
+}
+
+void ForEachTemplate::paint_overlay(Painter& p) {
+  if (children_.empty()) return;
+  const Rect c = content_rect();
+  const Size r = row_size({c.w, c.h});
+  for (int k = 1; k < std::max(1, preview_rows); ++k) {
+    p.save();
+    if (horizontal) p.translate((r.w + spacing) * static_cast<float>(k), 0);
+    else p.translate(0, (r.h + spacing) * static_cast<float>(k));
+    p.set_opacity(0.4f);
+    for (auto& ch : children_)
+      if (ch->is_visible()) ch->paint_tree(p);
+    p.restore();
+  }
+}
+
+// ── FormComponent / CustomView ───────────────────────────────────────────────
+
+std::function<Node(const std::string&)>& FormComponent::resolver() {
+  static std::function<Node(const std::string&)> r;
+  return r;
+}
+
+void FormComponent::set_form(std::string cls) {
+  if (cls == form_ && !children_.empty()) return;
+  form_ = std::move(cls);
+  refresh();
+}
+
+void FormComponent::refresh() {
+  clear_children();
+  if (!form_.empty() && resolver()) {
+    Node n = resolver()(form_);
+    if (n) add(std::move(n));
+  }
+  invalidate_layout();
+}
+
+Size FormComponent::measure_content(Size avail) {
+  if (children_.empty()) return {200, 64};
+  return children_.front()->measure(avail);
+}
+
+void FormComponent::layout() {
+  if (!children_.empty()) {
+    children_.front()->set_frame(content_rect());
+    children_.front()->layout();
+  }
+}
+
+void FormComponent::paint_content(Painter& p) {
+  const Theme& t = th();
+  const Rect c = content_rect();
+  if (children_.empty()) {
+    p.stroke_rect(c.inset(1), t.accent.with_alpha(0.6f), 1, t.radius_small);
+    p.text(c, form_.empty() ? std::string("Component: choose a form") : "Ui::" + form_, t.font_small, t.accent, Align::Center);
+  }
+}
+
+Size CustomView::measure_content(Size) {
+  return {std::max(120.f, measure_text(class_name, th().font, 0).w + 48), 40};
+}
+
+void CustomView::paint_content(Painter& p) {
+  const Theme& t = th();
+  const Rect c = content_rect();
+  p.fill_rect(c, t.accent.with_alpha(0.08f), t.radius_small);
+  p.stroke_rect(c.inset(0.5f), t.accent.with_alpha(0.55f), 1, t.radius_small);
+  p.text({c.x + 10, c.y, 20, c.h}, "\xE2\x97\x87", t.font, t.accent, Align::Center);
+  p.text({c.x + 32, c.y, c.w - 40, c.h}, class_name, t.font.with_weight(FontWeight::Medium), t.text, Align::LeftCenter);
+}
 
 namespace {
 
@@ -51,7 +168,8 @@ json::Value view_to_json(View& v) {
   }
   if (!bind.fields().empty()) j["bind"] = std::move(bind);
   if (!on.fields().empty()) j["on"] = std::move(on);
-  if (!v.children().empty()) {
+  const meta::TypeInfo* info = meta::find(v.type_name());
+  if (!v.children().empty() && (!info || info->container)) { // other views' children are their own parts
     json::Value kids = json::Value::array();
     for (auto& c : v.children()) kids.push_back(view_to_json(*c));
     j["children"] = std::move(kids);
@@ -144,29 +262,122 @@ const std::vector<std::string>& cpp_keywords() {
 
 void collect_refs(View& v, const std::vector<std::string>& reserved, std::vector<FormRef>& out) {
   const std::string& id = v.id();
-  if (is_cpp_identifier(id) && std::find(reserved.begin(), reserved.end(), id) == reserved.end() &&
+  const std::string_view type = v.type_name();
+  // a list is a class template (ForEach<T>) and its rows repeat: no pointers to them;
+  // components and project views have their own classes
+  if (type == "ForEach") return;
+  if (type != "Component" && type != "Custom" && is_cpp_identifier(id) &&
+      std::find(reserved.begin(), reserved.end(), id) == reserved.end() &&
       std::none_of(out.begin(), out.end(), [&](const FormRef& r) { return r.id == id; }))
     out.push_back({id, meta::cpp_class(v.type_name()), &v});
   for (auto& c : v.children()) collect_refs(*c, reserved, out);
 }
 
+std::string quote_str(const std::string& s) {
+  std::string o = "\"";
+  for (char c : s) {
+    if (c == '"' || c == '\\') o += '\\';
+    if (c == '\n') { o += "\\n"; continue; }
+    o += c;
+  }
+  return o + "\"";
+}
+
 struct Gen {
   const CodegenOptions& opt;
   std::vector<FormRef> refs;
+  std::vector<std::string> scope; // names of list items (and "index") visible here
 
-  void view(View& v, std::string& out, int depth) {
+  bool in_scope(const std::string& path) const {
+    const std::string head = path.substr(0, path.find('.'));
+    return std::find(scope.begin(), scope.end(), head) != scope.end();
+  }
+  // a binding path as C++: a member of the model, or a field of a list item
+  std::string expr(const std::string& path) const { return in_scope(path) ? path : opt.model + "." + path; }
+  std::string captures() const {
+    std::string c = "[&";
+    for (auto& s : scope) c += ", " + s;
+    return c + "]";
+  }
+
+  // ForEach(m.items, [&](const auto& item, std::size_t index) -> pulseui::Node { return row; })
+  void foreach_view(ForEachTemplate& f, std::string& out, int depth) {
+    const std::string pad(static_cast<std::size_t>(depth * 2), ' ');
+    const std::string* items = f.annotation("bind.items");
+    const std::string src = items && is_binding_path(*items) ? expr(*items) : std::string("std::vector<int>{} /* bind items to a std::vector */");
+    const std::string item = is_cpp_identifier(f.item_name) ? f.item_name : std::string("item");
+    out += pad + (f.virtualized ? "List(" : "ForEach(") + src + ", ";
+    if (!f.key.empty() && !f.virtualized && is_binding_path(f.key))
+      out += "[](const auto& " + item + ") { return " + item + "." + f.key + "; }, ";
+    out += captures() + "(const auto& " + item + ", std::size_t index) -> pulseui::Node {\n";
+    scope.push_back(item);
+    scope.push_back("index");
+    std::string row;
+    if (f.children().size() == 1) {
+      view(*f.children()[0], row, depth + 2);
+    } else {
+      row += std::string(static_cast<std::size_t>((depth + 2) * 2), ' ') + "VStack{\n";
+      for (auto& c : f.children()) {
+        view(*c, row, depth + 3);
+        row += ",\n";
+      }
+      row += std::string(static_cast<std::size_t>((depth + 2) * 2), ' ') + "}.spacing(4)";
+    }
+    scope.pop_back();
+    scope.pop_back();
+    if (f.children().empty()) row = std::string(static_cast<std::size_t>((depth + 2) * 2), ' ') + "Text(\"\")";
+    out += std::string(static_cast<std::size_t>((depth + 1) * 2), ' ') + "(void)index;\n";
+    out += std::string(static_cast<std::size_t>((depth + 1) * 2), ' ') + "return\n" + row + ";\n" + pad + "})";
+    if (f.virtualized) out += ".row_height(" + std::to_string(static_cast<int>(f.row_height)) + ")";
+    else {
+      if (f.spacing != 4) out += ".spacing(" + std::to_string(static_cast<int>(f.spacing)) + ")";
+      if (f.horizontal) out += ".horizontal()";
+    }
+  }
+
+  void view(View& v, std::string& out, int depth, bool page = false) {
     const std::string pad(static_cast<std::size_t>(depth * 2), ' ');
     const meta::TypeInfo* t = meta::find(v.type_name());
     if (!t) {
       out += pad + "/* unsupported: " + std::string(v.type_name()) + " */ Spacer()";
       return;
     }
-    out += pad + t->ctor_code(v);
-    if (t->container) {
+    const std::string type = v.type_name();
+    if (type == "ForEach") {
+      foreach_view(static_cast<ForEachTemplate&>(v), out, depth);
+    } else if (type == "Component") {
+      // another form: Ui::Form::part(m) or Ui::Form::part(m.member)
+      auto& c = static_cast<FormComponent&>(v);
+      const std::string* model = v.annotation("bind.model");
+      const std::string arg = model && is_binding_path(*model) ? expr(*model) : opt.model;
+      // wrapped, so the component's own modifiers (id, size, padding...) apply to it
+      out += pad + (c.form().empty() ? std::string("pulseui::VStack{} /* no form chosen */")
+                                     : "VStack{Ui::" + c.form() + "::part(" + arg + ")}.spacing(0)");
+    } else if (type == "Custom") {
+      auto& c = static_cast<CustomView&>(v);
+      out += pad + (is_cpp_identifier(c.class_name.substr(c.class_name.rfind(':') == std::string::npos ? 0 : c.class_name.rfind(':') + 1))
+                        ? c.class_name : std::string("pulseui::Spacer")) + "(" + c.args + ")";
+    } else if (type == "Canvas") {
+      // the draw event is the canvas' content: Canvas([&](Painter& p, const Rect& r) { m.draw(p, r); })
+      const std::string* method = v.annotation("on.draw");
+      if (method && is_binding_path(*method))
+        out += pad + "Canvas(" + captures() + "(pulseui::Painter& p, const pulseui::Rect& r) { " + expr(*method) + "(p, r); })";
+      else
+        out += pad + "Canvas([](pulseui::Painter&, const pulseui::Rect&) {})";
+    } else {
+      out += pad + t->ctor_code(v);
+    }
+    if (t->container && type != "ForEach") {
       out += "{\n";
       for (std::size_t i = 0; i < v.children().size(); ++i) {
-        view(*v.children()[i], out, depth + 1);
-        out += ",\n";
+        if (t->child_title) {
+          out += pad + "  Tab(" + quote_str(t->child_title(v, i)) + ",\n";
+          view(*v.children()[i], out, depth + 2, true);
+          out += "),\n";
+        } else {
+          view(*v.children()[i], out, depth + 1);
+          out += ",\n";
+        }
       }
       out += pad + "}";
     }
@@ -174,34 +385,58 @@ struct Gen {
     for (const meta::Property* p : meta::properties(v)) {
       if (!p->code || !p->get) continue;
       if (p->bind && v.annotation("bind." + p->name)) continue; // bound: the binding sets it
+      if (page && p->name == "visible") continue;                // Tabs shows one page at a time
       const meta::Value cur = p->get(v);
       if (def && meta::equal(cur, p->get(*def))) continue;
       out += p->code(v, cur);
     }
+    if (type == "Custom") out += static_cast<CustomView&>(v).modifiers; // typed in by the user
     if (opt.refs && std::any_of(refs.begin(), refs.end(), [&](const FormRef& r) { return r.view == &v; }))
       out += ".ref(" + v.id() + ")";
     // bindings: properties first, then events
     for (const meta::Property* p : meta::properties(v)) {
       const std::string* target = p->bind ? v.annotation("bind." + p->name) : nullptr;
       if (!target) continue;
-      if (is_binding_path(*target)) out += p->bind(opt.model + "." + *target);
-      else out += " /* invalid binding '" + *target + "' */";
+      if (type == "ForEach" && p->name == "items") continue; // the source of the list
+      if (type == "Component" && p->name == "model") continue; // the argument of part()
+      if (!is_binding_path(*target)) {
+        out += " /* invalid binding '" + *target + "' */";
+        continue;
+      }
+      // a field of a list item can only be shown, not written back
+      if (in_scope(*target) && p->bind_once) out += p->bind_once(expr(*target));
+      else out += p->bind(expr(*target));
     }
     for (const meta::Event& e : meta::events(v)) {
+      if (e.modifier.empty()) continue; // handled by the constructor (Canvas draw)
       const std::string* method = v.annotation("on." + e.name);
       if (!method) continue;
       if (!is_binding_path(*method)) {
         out += " /* invalid handler '" + *method + "' */";
         continue;
       }
-      const std::string call = opt.model + "." + *method;
-      if (e.arg.empty()) {
-        out += "." + e.modifier + "([&" + opt.model + "] { " + call + "(); })";
-      } else {
-        // the handler may take the value or nothing
-        out += "." + e.modifier + "([&" + opt.model + "](" + e.arg + " value) { if constexpr (requires { " + call +
-               "(value); }) " + call + "(value); else " + call + "(); })";
+      const std::string call = expr(*method);
+      // inside a list row the handler may also take the item or its index
+      std::vector<std::string> tries;
+      if (!e.arg.empty()) {
+        for (auto& s : scope)
+          if (s != "index") tries.push_back(s + ", value");
+        tries.push_back("value");
       }
+      for (auto it = scope.rbegin(); it != scope.rend(); ++it)
+        if (*it != "index") tries.push_back(*it); // the item first, then its index
+      if (!scope.empty()) tries.push_back("index");
+      const std::string cap = scope.empty() ? "[&" + opt.model + "]" : captures();
+      if (tries.empty()) {
+        out += "." + e.modifier + "(" + cap + " { " + call + "(); })";
+        continue;
+      }
+      // pulseui::form_call([&](auto&&... a) -> decltype(m.f(a...)) { return m.f(a...); },
+      //                    std::tie(item, value), std::tie(value), ..., std::tie())
+      std::string body = "pulseui::form_call([&](auto&&... a) -> decltype(" + call + "(a...)) { return " + call + "(a...); }";
+      for (auto& args : tries) body += ", std::tie(" + args + ")";
+      body += ", std::tie());";
+      out += "." + e.modifier + "(" + cap + "(" + (e.arg.empty() ? std::string() : e.arg + " value") + ") { " + body + " })";
     }
   }
 };
@@ -244,7 +479,7 @@ std::vector<FormRef> form_refs(View& root, const std::vector<std::string>& reser
 }
 
 std::string generate_cpp_expression(View& root, int indent, const CodegenOptions& options) {
-  Gen g{options, options.refs ? form_refs(root, options.reserved) : std::vector<FormRef>{}};
+  Gen g{options, options.refs ? form_refs(root, options.reserved) : std::vector<FormRef>{}, {}};
   std::string body;
   g.view(root, body, indent);
   return body;
