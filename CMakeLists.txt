@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(PulseUI VERSION 0.4.0 LANGUAGES CXX)
+project(PulseUI VERSION 0.4.1 LANGUAGES CXX)
 
 if(APPLE)
   enable_language(OBJCXX)

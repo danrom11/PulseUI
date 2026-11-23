@@ -52,6 +52,7 @@ public:
   static void set_clipboard(const std::string& text);
   static std::string clipboard();
 
+  // Quit when the last visible window closes (windows hidden with hide() don't count).
   bool quit_on_last_window_closed = true;
   std::vector<std::string> args;
 };

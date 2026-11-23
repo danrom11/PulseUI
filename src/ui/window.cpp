@@ -818,9 +818,11 @@ void Window::handle_destroyed() {
     if (!alive.expired()) native_.reset();
   });
   if (g_app && g_app->quit_on_last_window_closed) {
+    // only windows the user can see keep the app alive: a window hidden with
+    // hide() (kept to be shown again later) must not leave an invisible process
     bool any = false;
     for (Window* w : g_windows)
-      if (w != this && w->native_ && !w->destroyed_) any = true;
+      if (w != this && w->native_ && !w->destroyed_ && !w->hide_requested_) any = true;
     if (!any) platform::quit(0);
   }
 }

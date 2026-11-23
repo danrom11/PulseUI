@@ -194,6 +194,11 @@ src/platform/
 
 ## 📝 Changelog
 
+### 0.4.1
+- `quit_on_last_window_closed` ignores windows hidden with `hide()`: a hidden window (for example a second form
+  that hides itself instead of closing, to be shown again later) no longer keeps an invisible process alive after
+  the main window closes.
+
 ### 0.4.0
 - **Keyed `ForEach(items, key, row)`**: unchanged rows keep their views and state (focus, selection, text being
   typed), moved rows move, only new or changed items build rows. `.wrap()` lays rows out like `Wrap`.
